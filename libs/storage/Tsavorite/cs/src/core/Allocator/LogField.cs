@@ -164,7 +164,23 @@ namespace Tsavorite.core
             var objectId = *(int*)fieldAddress;
             if (objectId != ObjectIdMap.InvalidObjectId)
             {
-                objectIdMap.Free(objectId);
+                // A DISK-DESERIALIZED RECORD CARRIES A NULL MAP BY DESIGN, and this dereference was an
+                // unconditional NullReferenceException on every scan that reached such a record with a
+                // non-inline (overflow/object) key or value. DiskLogRecord builds `new LogRecord((long)ptr)`
+                // precisely to clear the map -- its own comment says "Reset to clear objectIdMap because it
+                // may be the one in the main log and we pass in a transient one when deserializing" -- so
+                // null here is the DOCUMENTED disk path, not a broken caller.
+                //
+                // There is nothing of ours to free in that case: the id indexes a map that does not exist in
+                // this context, and clearing the field to InvalidObjectId is the whole of the disposal work.
+                //
+                // MEASURED 2026-08-31 on the claude-mesh broker (24 GB store): this faulted every 20-60s at a
+                // fixed address inside SpanByteScanIterator.InitializeGetNextAndAcquireEpoch -> DiskLogRecord
+                // .Dispose -> LogRecord.ClearHeapFields. The host caught it and skipped to the next page
+                // boundary to keep going, so the visible symptom was NOT a crash -- it was a SHORT
+                // ENUMERATION: `mesh who` returned zero agents, which reads as "nobody is online" rather
+                // than "the scan fell over". A silent short scan is the expensive half of this bug.
+                objectIdMap?.Free(objectId);
                 *(int*)fieldAddress = ObjectIdMap.InvalidObjectId;
             }
 
