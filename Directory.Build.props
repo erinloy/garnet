@@ -57,4 +57,12 @@
     <PackageTags>Garnet key-value store cache dictionary hashtable concurrent persistent remote cluster Redis RESP</PackageTags>
   </PropertyGroup>
 
+  <!-- Ziltch fleet: this file stops MSBuild's upward walk, so the repo-root guard against
+       in-tree isolated output dirs (obj-pi-*/bin-pi-*) does not reach vendored garnet.
+       Mirror it here — the SDK excludes obj/ and bin/ BY NAME only, so a stray
+       obj-pi-<handle>/ gets its generated AssemblyInfo.cs compiled twice (CS0579). -->
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/obj-pi-*/**;**/bin-pi-*/**</DefaultItemExcludes>
+  </PropertyGroup>
+
 </Project>
