@@ -137,7 +137,24 @@ namespace Tsavorite.core
             var newLength = sizeInfo.FieldInfo.ValueSize;
             var newSpan = new Span<byte>((byte*)valueAddress, newLength);
 
-            if (objectId != ObjectIdMap.InvalidObjectId)
+            // A DISK-DESERIALIZED RECORD CARRIES A NULL MAP BY DESIGN — the same invariant f708fd7a documented one
+            // method below, and this site dereferences it with only an InvalidObjectId check, exactly as that one did.
+            // `DiskLogRecord` builds `new LogRecord((long)ptr)` precisely to clear the map ("Reset to clear objectIdMap
+            // because it may be the one in the main log and we pass in a transient one when deserializing"), so null
+            // here is the documented disk path and not a broken caller. ObjectIdMap is a class, so null is reachable.
+            //
+            // COMPACTION IS THE PATH THAT REACHES IT: CompactLookup copies DISK-RESIDENT records to the tail, and a
+            // record whose value is overflow converts to inline on the way. Measured 2026-09-01 on matrix-api's
+            // 145 GB store — every reclaim pass died here:
+            //     TryCopyToTail.cs:42 -> CompactLookup:51 -> Compact -> CompactAsync -> StatestoreReclaimDriver
+            // The reclaim is the ONLY mechanism that shrinks the log, so this fault is why that store grew from 89 to
+            // 147 segments in eight days with a correct driver, walk, guards and ceiling all in place.
+            //
+            // ⚖️ THE GUARD IS SCOPED TO READ-AND-FREE, DELIBERATELY. When the map is null there is no overflow
+            // allocation of OURS to copy out or free: the id indexes a map that does not exist in this context, and the
+            // conversion's remaining work is the inline reinterpretation below. `Allocate`/`Set` sites are NOT guarded
+            // and must not be — a null map THERE is a genuinely broken caller, and silencing it would hide a real bug.
+            if (objectId != ObjectIdMap.InvalidObjectId && objectIdMap is not null)
             {
                 var overflow = objectIdMap.GetOverflowByteArray(objectId);
                 var oldSpan = overflow.Span;
@@ -146,6 +163,12 @@ namespace Tsavorite.core
                 dataHeader.SetValueIsInline();
                 oldSpan.Slice(0, copyLength).CopyTo(newSpan);
                 objectIdMap.Free(objectId);
+            }
+            else if (objectId != ObjectIdMap.InvalidObjectId)
+            {
+                // Null map: mark inline so the record's lengths are correct for scanning, which is the whole of the
+                // conversion we can honestly perform without the map's backing allocation.
+                dataHeader.SetValueIsInline();
             }
             return newSpan;
         }
