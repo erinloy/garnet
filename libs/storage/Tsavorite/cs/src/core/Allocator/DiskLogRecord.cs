@@ -20,6 +20,29 @@ namespace Tsavorite.core
         /// <summary>The <see cref="LogRecord"/>> around the record data.</summary>
         internal LogRecord logRecord;
 
+        /// <summary>
+        /// DIAGNOSTIC ONLY — set by <see cref="Dispose"/> so a read AFTER disposal reports itself instead of
+        /// surfacing as a bare NullReferenceException from a nulled objectIdMap.
+        ///
+        /// <para>WHY THIS AND NOT A NULL GUARD. Compaction on matrix-api's 145 GB store dies every pass with an NRE
+        /// at <c>TryCopyToTail.cs:42</c>, and the copy reaches <c>TryCopyFrom</c> -> <c>srcLogRecord.ValueOverflow</c>
+        /// -> <c>logRecord.ValueOverflow</c> -> <c>objectIdMap.GetOverflowByteArray(...)</c>, which is unguarded.
+        /// It is TEMPTING to null-guard that getter. @ziltch1 refuted that cure 2026-09-02 and the refutation is the
+        /// reason this field exists: <c>logRecord</c> is constructed WITH a map (DiskLogRecord.cs:48 and :77 both pass
+        /// <c>transientObjectIdMap</c>) and only becomes null at <b>line 161, inside Dispose</b>. So a null map at that
+        /// getter does not mean "map absent" — it means <b>THE RECORD IS BEING READ AFTER DISPOSE</b>, a LIFETIME
+        /// defect. Guarding the getter would convert a hard crash into a returned empty value, compaction would then
+        /// run to completion and copy WRONG DATA to the tail, silently, on the one path that owns 145 GB. That trades
+        /// a loud correct failure for quiet corruption, which Erin's standing rule forbids by name.</para>
+        ///
+        /// <para>⚠️ STRUCT COPY SEMANTICS, stated because it bounds what a green result proves: this is a struct, so a
+        /// copy taken BEFORE disposal keeps a live map and never faults. The flag is therefore only meaningful on the
+        /// instance that was actually disposed — which is exactly the instance the observed NRE comes from, since the
+        /// map is null there. A run that faults WITHOUT this exception means the map was never set (the
+        /// <c>memoryLogRecord</c> path at :65), not that the record was disposed.</para>
+        /// </summary>
+        private bool disposedForDiagnostics;
+
         /// <summary>The buffer containing the record data, from either disk IO or a copy from a LogRecord that is carried through pending operations
         /// such as Compact or ConditionalCopyToTail. The <see cref="LogRecord"/> contains its <see cref="SectorAlignedMemory.GetValidPointer()"/>
         /// as its <see cref="LogRecord.physicalAddress"/>.</summary>
@@ -160,6 +183,10 @@ namespace Tsavorite.core
             }
             logRecord = default;
 
+            // AFTER the clear, deliberately: `logRecord = default` above also defaults every field of the INNER
+            // struct, so a marker living there would be erased by the very line it exists to witness.
+            disposedForDiagnostics = true;
+
             recordBuffer?.Return();
             recordBuffer = default;
         }
@@ -187,7 +214,29 @@ namespace Tsavorite.core
         /// <inheritdoc/>
         public OverflowByteArray ValueOverflow
         {
-            readonly get => logRecord.ValueOverflow;
+            readonly get
+            {
+                // THE DISCRIMINATOR. This getter is the measured fault site: compaction's copy-to-tail reads it and
+                // dies on a null objectIdMap. Reporting the DISPOSED case by name separates the two hypotheses that
+                // produce an identical NullReferenceException, and — unlike a null guard — it cannot turn either of
+                // them into a silently empty value.
+                //
+                //   throws ObjectDisposedException  =>  USE-AFTER-DISPOSE. The owner is whoever holds this
+                //                                       DiskLogRecord across the Compact/TryCopyToTail boundary.
+                //   still throws NullReferenceException  =>  the map was NEVER set; the memoryLogRecord path (:65)
+                //                                       is next, and this diagnostic has ruled a whole branch out.
+                if (disposedForDiagnostics)
+                {
+                    throw new ObjectDisposedException(nameof(DiskLogRecord),
+                        $"ValueOverflow read AFTER Dispose() on the record at 0x{logRecord.physicalAddress:X}. "
+                        + "Dispose() nulls the inner LogRecord's objectIdMap, so this read would otherwise surface as "
+                        + "a bare NullReferenceException with no indication that the record's LIFETIME is the defect. "
+                        + "Do NOT cure this by null-guarding the getter: that returns an empty value, lets compaction "
+                        + "complete, and copies wrong data to the tail silently.");
+                }
+
+                return logRecord.ValueOverflow;
+            }
             set => logRecord.ValueOverflow = value;
         }
 
