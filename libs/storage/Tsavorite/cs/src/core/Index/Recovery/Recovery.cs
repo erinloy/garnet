@@ -296,7 +296,11 @@ namespace Tsavorite.core
 
                     // We have found the exact version to recover to: the above conditional establishes that the checkpointed version is <= requested version,
                     // and if nextVersion is larger than requestedVersion, there cannot be any closer version. 
-                    if (current.info.nextVersion > requestedVersion)
+                    // ONLY when a version was actually requested: with -1 ("the latest"), nextVersion > -1 holds for EVERY token,
+                    // so this took the FIRST token the factory listed. The comment above this loop is right that the file
+                    // system does not list tokens by freshness - a blob listing orders by LastModified at one-second
+                    // resolution - and the latest is the largest version, found only by finishing the loop.
+                    if (requestedVersion != -1 && current.info.nextVersion > requestedVersion)
                     {
                         closest = current;
                         closestToken = hybridLogToken;
