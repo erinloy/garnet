@@ -294,17 +294,52 @@ namespace Tsavorite.core
 
         /// <inheritdoc/>
         /// <remarks>
-        /// GUARDED LIKE ITS SIBLINGS, WHICH IT WAS NOT. <c>RecordType</c> (:271), <c>Namespace</c> (:274) and
-        /// <c>ETag</c> (:305) all read <c>logRecord.IsSet ? ... : default</c>; <c>Key</c> alone dereferenced
-        /// unconditionally. An UNSET record therefore had three members that answered safely and one that threw
-        /// NullReferenceException - and the one that threw is the one a pending-read completion reaches first,
-        /// through <c>KeyBytes</c> -> <c>GetKeyHashCode64</c>.
-        /// MEASURED 2026-09-12: that NRE is unhandled on the boot projection path and took the ziltch-webfrontend
-        /// cell down for two hours (ContinuePending.cs:44, reached from MaterializedViewProjector.StartAsync ->
-        /// TsavoriteEventLog.ScanAllAsync). Three siblings already prove <c>logRecord.IsSet</c> is safe to ask on an
-        /// unset record, so this restores a convention rather than inventing one.
+        /// THE SAME DISCRIMINATOR <c>ValueOverflow</c> CARRIES, ON THE OTHER MEASURED FAULT SITE. <c>Key</c> reaches
+        /// <c>objectIdMap</c> exactly as <c>ValueOverflow</c> does - <c>LogRecord.Key</c> (LogRecord.cs:202-209) is
+        /// <c>KeyIsInline ? inline span : objectIdMap.GetOverflowByteArray(...)</c> - so a NON-INLINE key on a record
+        /// whose map is null dies here with a bare NullReferenceException carrying no indication of WHY the map is null.
+        ///
+        /// <para>MEASURED 2026-09-12, and it cost a cell most of a night. ziltch-webfrontend crash-looped on
+        /// <c>get_Key</c> reached from <c>ContinuePendingRead</c> -> <c>KeyBytes</c> -> <c>GetKeyHashCode64</c>, itself
+        /// under the BOOT projection (MaterializedViewProjector.StartAsync -> TsavoriteEventLog.ScanAllAsync). I first
+        /// read that as an UNSET record and guarded <c>IsSet</c>; the cell then crashed AGAIN on the sha carrying that
+        /// guard, at this very line, which proves <c>IsSet</c> was TRUE and the unset hypothesis wrong. The
+        /// <c>IsSet</c> arm is kept only because the siblings (<c>RecordType</c> :271, <c>Namespace</c> :274,
+        /// <c>ETag</c> :316) already answer that way and <c>Key</c> was the one member that did not - it is a
+        /// consistency fix, NOT the cure for the observed crash.</para>
+        ///
+        /// <para>SO THE DISCRIMINATOR IS THE POINT, and it is deliberately NOT a null guard on the map - see the type
+        /// comment above, which records why that cure was refused: an empty value lets a caller proceed and, on the
+        /// compaction path, copy wrong data to the tail silently.
+        /// <list type="bullet">
+        /// <item>throws <see cref="ObjectDisposedException"/> =&gt; USE-AFTER-DISPOSE. The owner is whoever holds this
+        /// DiskLogRecord across the pending-read completion boundary, and the record LIFETIME is the defect.</item>
+        /// <item>still throws NullReferenceException =&gt; the map was NEVER set on this record, so the construction
+        /// path is the defect (the <c>memoryLogRecord</c> path at :65 is next), and this arm has ruled out the other
+        /// branch rather than hiding it.</item>
+        /// </list>
+        /// Either way the next crash NAMES which of the two it is, which is the whole reason to spend a branch here:
+        /// tonight both hypotheses produced an identical bare NRE and neither could be eliminated from the log.</para>
         /// </remarks>
-        public readonly ReadOnlySpan<byte> Key => logRecord.IsSet ? logRecord.Key : default;
+        public readonly ReadOnlySpan<byte> Key
+        {
+            get
+            {
+                if (disposedForDiagnostics)
+                {
+                    throw new ObjectDisposedException(nameof(DiskLogRecord),
+                        $"Key read AFTER Dispose() on the record at 0x{logRecord.physicalAddress:X}. Dispose() nulls "
+                        + "the inner LogRecord objectIdMap, and a NON-INLINE key resolves through that map, so this "
+                        + "read would otherwise surface as a bare NullReferenceException with no indication that the "
+                        + "record LIFETIME is the defect. Measured 2026-09-12 on ziltch-webfrontend, reached from "
+                        + "ContinuePendingRead via KeyBytes/GetKeyHashCode64 under the boot projection. Do NOT cure "
+                        + "this by null-guarding the map: that returns an empty key, lets the caller proceed, and on "
+                        + "the compaction path copies wrong data to the tail silently.");
+                }
+
+                return logRecord.IsSet ? logRecord.Key : default;
+            }
+        }
 
         /// <inheritdoc/>
         public readonly Span<byte> ValueSpan => logRecord.ValueSpan;
