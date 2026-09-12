@@ -55,7 +55,15 @@ namespace Tsavorite.core
             // exactly the data loss worth naming: a cell that boots clean and a cell that boots having dropped part
             // of its state would look identical. The counter names the address, so "how much of this store is gone"
             // is a number a reader can ask for rather than an inference from a cell that stopped.
-            if (!pendingState.DiskLogRecord.IsSet)
+            // AND IT ASKS WHETHER THE KEY CAN BE RESOLVED, NOT MERELY WHETHER THE RECORD IS SET. @ziltch2, 2026-09-12:
+            // "the guard at :58 is in the wrong place regardless - it tests IsSet then reads the key at :65 through a
+            // map it never checked." Exactly right, and it is why the first version of this guard was inert: IsSet
+            // tests physicalAddress != 0, while the line below resolves an OVERFLOW key through objectIdMap. Measured
+            // on ziltch-webfrontend: the guard PASSED and :65 still threw, three boots running.
+            // A record whose key cannot be resolved cannot answer this read AT ALL, so it is UNDELIVERABLE - and by the
+            // 2026-09-12 ruling a read of gone log returns ABSENT, never an error. Counted, so it is absent-and-named
+            // rather than absent-and-silent.
+            if (!pendingState.DiskLogRecord.IsSet || !pendingState.DiskLogRecord.CanResolveKey)
             {
                 UndeliveredPendingReads.Record(request.logicalAddress);
                 goto NotFound;

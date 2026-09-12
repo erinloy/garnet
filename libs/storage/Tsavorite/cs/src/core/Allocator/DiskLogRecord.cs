@@ -43,6 +43,31 @@ namespace Tsavorite.core
         /// </summary>
         private bool disposedForDiagnostics;
 
+        /// <summary>WHICH CONSTRUCTOR BUILT THIS RECORD. @ziltch2 asked for this by name 2026-09-12: three hypotheses
+        /// for the webfrontend boot crash produced an identical bare NullReferenceException, two were eliminated by
+        /// evidence, and the third - a record COPIED from a memory LogRecord, inheriting a null map - could only be
+        /// confirmed by tracing the construction, which reading alone could not close. So the record carries its own
+        /// provenance and the failure names it. One byte, packed beside the flag above.</summary>
+        private readonly byte ctorTag;
+
+        /// <summary>The constructor that built this record, for a failure message. "unconstructed" is
+        /// <c>default(DiskLogRecord)</c>, which is a legitimate state (an empty pending slot), not a defect.</summary>
+        internal readonly string ConstructedBy => ctorTag switch
+        {
+            1 => "DiskLogRecord(SectorAlignedMemory, ObjectIdMap, keyOverflow, valueOverflow, valueObject) - passes a map",
+            2 => "DiskLogRecord(in LogRecord) - COPIES the source record's map, INCLUDING null",
+            3 => "DiskLogRecord(SectorAlignedMemory, ObjectIdMap) - passes a map",
+            _ => "unconstructed (default(DiskLogRecord))",
+        };
+
+        /// <summary>Whether <see cref="Key"/> can actually be resolved. An INLINE key always can; an OVERFLOW key
+        /// resolves through <c>objectIdMap</c> (LogRecord.cs:208) and therefore cannot when the map is absent.
+        /// <para>@ziltch2, 2026-09-12: "the guard at :58 is in the wrong place regardless - it tests IsSet then reads
+        /// the key at :65 through a map it never checked." Correct, and this is the question that guard should have
+        /// asked. IsSet tests physicalAddress != 0 and says nothing about the map.</para></summary>
+        internal readonly bool CanResolveKey
+            => !logRecord.IsSet || logRecord.DataHeader.KeyIsInline || logRecord.ObjectIdMap is not null;
+
         /// <summary>The buffer containing the record data, from either disk IO or a copy from a LogRecord that is carried through pending operations
         /// such as Compact or ConditionalCopyToTail. The <see cref="LogRecord"/> contains its <see cref="SectorAlignedMemory.GetValidPointer()"/>
         /// as its <see cref="LogRecord.physicalAddress"/>.</summary>
@@ -67,6 +92,7 @@ namespace Tsavorite.core
         private DiskLogRecord(SectorAlignedMemory recordBuffer, ObjectIdMap transientObjectIdMap, OverflowByteArray keyOverflow,
             OverflowByteArray valueOverflow, IHeapObject valueObject)
         {
+            ctorTag = 1;
             this.recordBuffer = recordBuffer;
             logRecord = new((long)recordBuffer.GetValidPointer(), transientObjectIdMap);
 
@@ -85,6 +111,7 @@ namespace Tsavorite.core
         /// </summary>
         internal DiskLogRecord(in LogRecord memoryLogRecord)
         {
+            ctorTag = 2;
             logRecord = memoryLogRecord;
         }
 
@@ -96,6 +123,7 @@ namespace Tsavorite.core
         /// <remarks>We always own the record buffer; it is either transferred to us, or allocated as a copy of the record memory</remarks>
         private DiskLogRecord(SectorAlignedMemory recordBuffer, ObjectIdMap transientObjectIdMap)
         {
+            ctorTag = 3;
             this.recordBuffer = recordBuffer;
             logRecord = new((long)recordBuffer.GetValidPointer(), transientObjectIdMap);
         }
@@ -335,6 +363,21 @@ namespace Tsavorite.core
                         + "ContinuePendingRead via KeyBytes/GetKeyHashCode64 under the boot projection. Do NOT cure "
                         + "this by null-guarding the map: that returns an empty key, lets the caller proceed, and on "
                         + "the compaction path copies wrong data to the tail silently.");
+                }
+
+                // NAMES THE CONSTRUCTOR RATHER THAN DYING NAMELESSLY. An OVERFLOW key resolves through
+                // objectIdMap (LogRecord.cs:208); with no map that is a bare NullReferenceException carrying nothing
+                // about WHY the map is absent. Measured on ziltch-webfrontend 2026-09-12: IsSet TRUE, not disposed,
+                // non-inline key, map null - a state only the copying constructor can produce, which is exactly what
+                // this message now reports so the next crash closes the gap instead of narrowing it.
+                if (!CanResolveKey)
+                {
+                    throw new InvalidOperationException(
+                        $"this record's key is NON-INLINE and its objectIdMap is absent, so the key cannot be resolved "
+                        + $"(record at 0x{logRecord.physicalAddress:X}). Built by: {ConstructedBy}. An overflow key "
+                        + "resolves through the map (LogRecord.cs:208), and IsSet only tests physicalAddress - it says "
+                        + "nothing about the map, which is why an IsSet guard cannot prevent this. Do NOT cure it by "
+                        + "returning an empty key: a caller would proceed on a key that is not this record's.");
                 }
 
                 return logRecord.IsSet ? logRecord.Key : default;
