@@ -40,6 +40,27 @@ namespace Tsavorite.core
             if (operationState.IsReadAtAddress && !operationState.IsNoKey && !storeFunctions.KeysEqual(pendingState.DiskLogRecord, pendingState.requestKey))
                 goto NotFound;
 
+            // AN UNDELIVERED PENDING READ IS ABSENT, AND IT IS COUNTED. The stackCtx line below hashes the record's
+            // KEY, and nothing above verified the completed read actually produced a record - the only prior checks
+            // are the two logicalAddress bounds tests. A read that completes without one was therefore DEREFERENCED
+            // rather than refused: NullReferenceException out of DiskLogRecord.Key, unhandled, killing the process.
+            // Measured 2026-09-12 on ziltch-webfrontend - two hours down, the NRE raised from the BOOT projection.
+            //
+            // ABSENT is the ruled answer, not a fallback. Erin, 2026-09-12: future re-derives will be impractically
+            // large, so go-forward solutions must assume ancient log history is permanently gone - and a read of gone
+            // log returns ABSENT, never an error. A record that cannot be delivered IS gone, whatever range its
+            // address sits in. Crashing is the one answer that ruling excludes.
+            //
+            // AND IT IS COUNTED, WHICH IS WHAT SEPARATES THIS FROM A SILENT FALLBACK. Absent-and-silent would hide
+            // exactly the data loss worth naming: a cell that boots clean and a cell that boots having dropped part
+            // of its state would look identical. The counter names the address, so "how much of this store is gone"
+            // is a number a reader can ask for rather than an inference from a cell that stopped.
+            if (!pendingState.DiskLogRecord.IsSet)
+            {
+                UndeliveredPendingReads.Record(request.logicalAddress);
+                goto NotFound;
+            }
+
             SpinWaitUntilClosed(request.logicalAddress);
             OperationStackContext<TStoreFunctions, TAllocator> stackCtx = new(storeFunctions.GetKeyHashCode64(pendingState.DiskLogRecord));
 

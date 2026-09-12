@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -293,7 +293,18 @@ namespace Tsavorite.core
         public readonly RecordDataHeader DataHeader => logRecord.DataHeader;
 
         /// <inheritdoc/>
-        public readonly ReadOnlySpan<byte> Key => logRecord.Key;
+        /// <remarks>
+        /// GUARDED LIKE ITS SIBLINGS, WHICH IT WAS NOT. <c>RecordType</c> (:271), <c>Namespace</c> (:274) and
+        /// <c>ETag</c> (:305) all read <c>logRecord.IsSet ? ... : default</c>; <c>Key</c> alone dereferenced
+        /// unconditionally. An UNSET record therefore had three members that answered safely and one that threw
+        /// NullReferenceException - and the one that threw is the one a pending-read completion reaches first,
+        /// through <c>KeyBytes</c> -> <c>GetKeyHashCode64</c>.
+        /// MEASURED 2026-09-12: that NRE is unhandled on the boot projection path and took the ziltch-webfrontend
+        /// cell down for two hours (ContinuePending.cs:44, reached from MaterializedViewProjector.StartAsync ->
+        /// TsavoriteEventLog.ScanAllAsync). Three siblings already prove <c>logRecord.IsSet</c> is safe to ask on an
+        /// unset record, so this restores a convention rather than inventing one.
+        /// </remarks>
+        public readonly ReadOnlySpan<byte> Key => logRecord.IsSet ? logRecord.Key : default;
 
         /// <inheritdoc/>
         public readonly Span<byte> ValueSpan => logRecord.ValueSpan;
