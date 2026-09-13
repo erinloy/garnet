@@ -32,6 +32,9 @@ namespace Tsavorite.core
         /// <summary>The action to execute on flush completion; used only for <see cref="TsavoriteLog"/></summary>
         internal Action<CommitInfo> flushCallback;
 
+        /// <summary>Called for every failed log page write (range, error code, consecutive attempt); from <see cref="KVSettings.FlushErrorCallback"/>.</summary>
+        internal Action<CommitInfo, int> flushErrorCallback;
+
         internal AllocatorSettings(LogSettings logSettings, LightEpoch epoch, ILogger logger)
         {
             this.LogSettings = logSettings;

@@ -195,7 +195,10 @@ namespace Tsavorite.core
                     ReadCopyOptions.CopyFrom = ReadCopyFrom.Device;
 
                 // Create the allocator
-                var allocatorSettings = new AllocatorSettings(logSettings, epoch, kvSettings.logger ?? kvSettings.loggerFactory?.CreateLogger(typeof(TAllocator).Name));
+                var allocatorSettings = new AllocatorSettings(logSettings, epoch, kvSettings.logger ?? kvSettings.loggerFactory?.CreateLogger(typeof(TAllocator).Name))
+                {
+                    flushErrorCallback = kvSettings.FlushErrorCallback
+                };
                 hlog = allocatorFactory(allocatorSettings, storeFunctions);
                 hlogBase = hlog.GetBase<TAllocator>();
                 hlogBase.Initialize();

@@ -156,6 +156,18 @@ namespace Tsavorite.core
         /// </summary>
         public int PendingReadNoProgressLimit = DefaultPendingReadNoProgressLimit;
 
+        /// <summary>Default for <see cref="FlushRetryLimit"/>.</summary>
+        public const int DefaultFlushRetryLimit = 5;
+
+        /// <summary>
+        /// Consecutive failed writes of one log page range after which every waiter on the flushed-until address (a
+        /// checkpoint's WAIT_FLUSH) FAILS with <see cref="TsavoriteFlushFaultException"/>. The page is re-issued with a
+        /// capped backoff whatever this is, and a later success clears the fault; this bounds how long a checkpoint may wait
+        /// on a range the device keeps refusing. Before it existed a failed page flush was parked in an error list, never
+        /// re-issued, FlushedUntilAddress froze below it, and every later checkpoint waited forever.
+        /// </summary>
+        public int FlushRetryLimit = DefaultFlushRetryLimit;
+
         /// <summary>
         /// Number of page buffers during a Flush operation on a page or portion of a page. There may be multiple sets of buffers at any given time,
         /// depending on page parallelism. Must be a power of 2.

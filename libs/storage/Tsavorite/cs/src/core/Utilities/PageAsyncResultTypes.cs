@@ -116,6 +116,9 @@ namespace Tsavorite.core
         internal long fromAddress;
         internal long untilAddress;
 
+        /// <summary>Consecutive failed writes of this range (a KV page flush is re-issued on failure; see <see cref="LogSettings.FlushRetryLimit"/>).</summary>
+        internal int flushAttempts;
+
         /// <summary>Identifes the operation that triggered the flush.</summary>
         internal FlushRequestState flushRequestState;
 

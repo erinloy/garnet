@@ -588,6 +588,20 @@ namespace Tsavorite.core
         /// <summary>See <see cref="LogSettings.PendingReadNoProgressLimit"/>.</summary>
         private readonly int pendingReadNoProgressLimit;
 
+        /// <summary>See <see cref="LogSettings.FlushRetryLimit"/>.</summary>
+        private readonly int flushRetryLimit;
+
+        /// <summary>See <see cref="KVSettings.FlushErrorCallback"/>.</summary>
+        private readonly Action<CommitInfo, int> flushErrorCallback;
+
+        /// <summary>The page range the device is refusing past <see cref="LogSettings.FlushRetryLimit"/>, or null. While set, a
+        /// checkpoint that must wait for the flushed-until address fails with it instead of waiting.</summary>
+        private volatile TsavoriteFlushFaultException flushFault;
+
+        /// <summary>The standing flush fault (see <see cref="LogSettings.FlushRetryLimit"/>), or null when every issued page
+        /// write has landed or is still inside its retry budget.</summary>
+        public TsavoriteFlushFaultException FlushFault => flushFault;
+
         /// <summary>Instantiate base allocator implementation</summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         private protected AllocatorBase(AllocatorSettings allocatorSettings, TStoreFunctions storeFunctions, Func<object, TAllocator> wrapperCreator,
@@ -650,6 +664,10 @@ namespace Tsavorite.core
             if (logSettings.PendingReadNoProgressLimit < 1)
                 throw new TsavoriteException($"{nameof(logSettings.PendingReadNoProgressLimit)} must be at least 1");
             pendingReadNoProgressLimit = logSettings.PendingReadNoProgressLimit;
+            if (logSettings.FlushRetryLimit < 1)
+                throw new TsavoriteException($"{nameof(logSettings.FlushRetryLimit)} must be at least 1");
+            flushRetryLimit = logSettings.FlushRetryLimit;
+            flushErrorCallback = allocatorSettings.flushErrorCallback;
 
             this.logger = logger;
             if (logSettings.LogDevice == null)
@@ -1548,6 +1566,10 @@ namespace Tsavorite.core
                 notifyFlushedUntilAddressTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 notifyDone = notifyFlushedUntilAddressTcs.Task;
                 notifyFlushedUntilAddress = localTailAddress;
+                // A standing flush fault means FlushedUntilAddress cannot reach this tail: the waiter fails now, with the range
+                // and the code, rather than waiting for a flush the device is refusing.
+                if (flushFault is { } fault)
+                    _ = notifyFlushedUntilAddressTcs.TrySetException(fault);
                 epoch.BumpCurrentEpoch(() => OnPagesMarkedReadOnly(localTailAddress));
                 return true;
             }
@@ -2638,11 +2660,51 @@ namespace Tsavorite.core
         {
             try
             {
-                if (errorCode != 0)
-                    logger?.LogError("AsyncFlushPageCallback error: {errorCode}", errorCode);
-
                 // Set the page status to flushed
                 var result = (PageAsyncFlushResult<Empty>)context;
+
+                if (errorCode != 0)
+                {
+                    var attempt = ++result.flushAttempts;
+                    logger?.LogError("AsyncFlushPageCallback error: {errorCode} writing [{from}, {until}) (attempt {attempt})",
+                        errorCode, AddressString(result.fromAddress), AddressString(result.untilAddress), attempt);
+                    flushErrorCallback?.Invoke(new CommitInfo { FromAddress = result.fromAddress, UntilAddress = result.untilAddress, ErrorCode = errorCode }, attempt);
+
+                    // A FAILED KV PAGE FLUSH IS RE-ISSUED, AND A RANGE THAT KEEPS FAILING FAILS ITS WAITERS. The error-list leg below
+                    // parks the range and never writes it again: nothing re-issues it on the KV path (FlushCallback is set only by
+                    // TsavoriteLog, which owns that recovery), so FlushedUntilAddress froze below it, every later checkpoint's
+                    // WAIT_FLUSH waited forever under the host's checkpoint lock, and the cell hung quietly. Re-issuing writes the
+                    // SAME page from memory - a page cannot be evicted until it is flushed - after a capped backoff off the I/O
+                    // thread. Only a single-operation flush (the inline page write) is re-issued; a multi-part flush keeps the
+                    // error-list leg.
+                    if (FlushCallback is null && Volatile.Read(ref result.count) == 1)
+                    {
+                        if (attempt >= flushRetryLimit)
+                        {
+                            var fault = new TsavoriteFlushFaultException(result.fromAddress, result.untilAddress, errorCode, attempt);
+                            if (flushFault is null)
+                                logger?.LogCritical(fault, "Log flush fault: checkpoints will fail until [{from}, {until}) is written",
+                                    AddressString(result.fromAddress), AddressString(result.untilAddress));
+                            flushFault = fault;
+                            _ = notifyFlushedUntilAddressTcs?.TrySetException(fault);
+                        }
+                        var delayMs = Math.Min(30_000, 100 << Math.Min(attempt - 1, 9));
+                        _ = Task.Delay(delayMs).ContinueWith(_ =>
+                        {
+                            try { WriteAsync(result.page, AsyncFlushPageCallback, result); }
+                            catch when (disposed) { }
+                        }, TaskScheduler.Default);
+                        return;
+                    }
+                }
+                else if (result.flushAttempts > 0)
+                {
+                    logger?.LogWarning("Log flush of [{from}, {until}) succeeded after {attempts} failed attempt(s)",
+                        AddressString(result.fromAddress), AddressString(result.untilAddress), result.flushAttempts);
+                    if (flushFault is { } standing && standing.FromAddress == result.fromAddress)
+                        flushFault = null;
+                    result.flushAttempts = 0;
+                }
 
                 if (result.Release() == 0)
                 {

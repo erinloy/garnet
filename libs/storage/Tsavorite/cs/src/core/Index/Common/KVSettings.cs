@@ -167,6 +167,13 @@ namespace Tsavorite.core
         /// before a pending read fails. Widen it for a device that legitimately delivers a record in several short reads.</summary>
         public int PendingReadNoProgressLimit = LogSettings.DefaultPendingReadNoProgressLimit;
 
+        /// <summary>See <see cref="LogSettings.FlushRetryLimit"/>.</summary>
+        public int FlushRetryLimit = LogSettings.DefaultFlushRetryLimit;
+
+        /// <summary>Called for EVERY failed log page write: the range, the device error code, and the consecutive attempt
+        /// number for that range. The host's instrument - a count and a log line - for a fault the engine is retrying.</summary>
+        public Action<CommitInfo, int> FlushErrorCallback;
+
         /// <summary>Sentinel value indicating that the default <see cref="IStreamBuffer.DefaultInitialIORecordSize"/> should be used.</summary>
         public const int UseDefaultInitialIORecordSize = -1;
 
@@ -265,7 +272,8 @@ namespace Tsavorite.core
                 ReadCacheSettings = GetReadCacheSettings(),
                 MaxInlineKeySize = MaxInlineKeySize,
                 MaxInlineValueSize = MaxInlineValueSize,
-                PendingReadNoProgressLimit = PendingReadNoProgressLimit
+                PendingReadNoProgressLimit = PendingReadNoProgressLimit,
+                FlushRetryLimit = FlushRetryLimit
             };
 
         private ReadCacheSettings GetReadCacheSettings()
