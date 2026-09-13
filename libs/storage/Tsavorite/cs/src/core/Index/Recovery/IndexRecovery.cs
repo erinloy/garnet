@@ -112,6 +112,49 @@ namespace Tsavorite.core
             recoveryCountdown.Decrement();
         }
 
+        /// <summary>
+        /// DEFENCE IN DEPTH AT RECOVERY: clears every main-log hash entry whose address is at or beyond
+        /// <paramref name="logFinalAddress"/>, the recovered log's final address, and returns how many it cleared. No such entry
+        /// can name a record the recovered log holds - recovery replays the log only up to that address - so an entry past it
+        /// is a pointer into bytes this store will never have: a point read of its key would issue a device read past what
+        /// the log contains. Recovery pairs an index checkpoint only with a log checkpoint at or past it, so a consistent pair
+        /// has none; an index snapshot that disagrees with its log (a mismatched or partially restored pair) is exactly what
+        /// this catches. Read-cache entries are not log addresses and are left alone. One in-memory pass over the buckets
+        /// recovery has just loaded - the same shape as <see cref="DeleteTentativeEntries"/>.
+        /// </summary>
+        internal unsafe long ScrubEntriesAtOrBeyond(long logFinalAddress)
+        {
+            long scrubbed = 0;
+            HashBucketEntry entry = default;
+            int version = resizeInfo.version;
+            var table_size_ = state[version].size;
+            var ptable_ = state[version].tableAligned;
+
+            for (long bucket = 0; bucket < table_size_; bucket++)
+            {
+                HashBucket* b = ptable_ + bucket;
+                while (true)
+                {
+                    for (int bucket_entry = 0; bucket_entry < Constants.kOverflowBucketIndex; bucket_entry++)
+                    {
+                        entry.word = b->bucket_entries[bucket_entry];
+                        if (entry.word == 0 || entry.IsReadCache)
+                            continue;
+                        var address = LogAddress.AbsoluteAddress(entry.Address);
+                        if (address != LogAddress.kInvalidAddress && address >= logFinalAddress)
+                        {
+                            b->bucket_entries[bucket_entry] = 0;
+                            scrubbed++;
+                        }
+                    }
+                    var overflow = b->bucket_entries[Constants.kOverflowBucketIndex] & (long)LogAddress.kAddressBitMask;
+                    if (overflow == 0) break;
+                    b = (HashBucket*)overflowBucketsAllocator.GetPhysicalAddress(overflow);
+                }
+            }
+            return scrubbed;
+        }
+
         internal unsafe void DeleteTentativeEntries()
         {
             HashBucketEntry entry = default;
