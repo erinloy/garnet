@@ -145,6 +145,17 @@ namespace Tsavorite.core
         /// </summary>
         public int MaxInlineValueSize = DefaultMaxInlineValueSize;
 
+        /// <summary>Default for <see cref="PendingReadNoProgressLimit"/>.</summary>
+        public const int DefaultPendingReadNoProgressLimit = 3;
+
+        /// <summary>
+        /// How many times a pending read may re-read the SAME address without the device delivering more bytes before
+        /// the read FAILS. A device error code fails the read the first time regardless; this bounds the silent case,
+        /// a short or empty buffer reported with no error, which the incomplete-record path would otherwise re-issue
+        /// forever with the calling thread parked (measured: ~300,000 empty reads in 12 s, never returning).
+        /// </summary>
+        public int PendingReadNoProgressLimit = DefaultPendingReadNoProgressLimit;
+
         /// <summary>
         /// Number of page buffers during a Flush operation on a page or portion of a page. There may be multiple sets of buffers at any given time,
         /// depending on page parallelism. Must be a power of 2.

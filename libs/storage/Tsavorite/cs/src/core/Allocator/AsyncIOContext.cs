@@ -63,6 +63,18 @@ namespace Tsavorite.core
         /// </summary>
         internal AsyncIOContextCompletionEvent completionEvent;
 
+        /// <summary>The device's error code for the most recent read of this op (0 = none). A non-zero code FAILS the op.</summary>
+        internal uint deviceErrorCode;
+
+        /// <summary>The byte count the device reported for the most recent read of this op.</summary>
+        internal uint deviceBytes;
+
+        /// <summary>The address of the current run of re-reads that delivered no more bytes, its byte count, and its length.
+        /// See <see cref="LogSettings.PendingReadNoProgressLimit"/>.</summary>
+        internal long noProgressAddress;
+        internal int noProgressAvailable;
+        internal int noProgressCount;
+
         /// <summary>
         /// Reset all fields to default (for pooling). The receiver instance stays alive so the
         /// pool keeps a stable identity; only the fields change.
@@ -79,6 +91,18 @@ namespace Tsavorite.core
             objBuffer = null;
             callbackQueue = null;
             completionEvent = null;
+            ResetReadFaultState();
+        }
+
+        /// <summary>Clears the per-read fault tracking; a fresh read of a new key starts with no history.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void ResetReadFaultState()
+        {
+            deviceErrorCode = 0;
+            deviceBytes = 0;
+            noProgressAddress = kInvalidAddress;
+            noProgressAvailable = 0;
+            noProgressCount = 0;
         }
 
         /// <summary>
@@ -134,6 +158,7 @@ namespace Tsavorite.core
 
             request.requestKey = ConditionallyHoistedKey.Create(requestKey, bufferPool);
             request.logicalAddress = logicalAddress;
+            request.ResetReadFaultState();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -163,6 +163,10 @@ namespace Tsavorite.core
         /// </summary>
         public int MaxInlineValueSize = DefaultMaxInlineValueSize;
 
+        /// <summary>See <see cref="LogSettings.PendingReadNoProgressLimit"/>: re-reads of one address with no byte progress
+        /// before a pending read fails. Widen it for a device that legitimately delivers a record in several short reads.</summary>
+        public int PendingReadNoProgressLimit = LogSettings.DefaultPendingReadNoProgressLimit;
+
         /// <summary>Sentinel value indicating that the default <see cref="IStreamBuffer.DefaultInitialIORecordSize"/> should be used.</summary>
         public const int UseDefaultInitialIORecordSize = -1;
 
@@ -260,7 +264,8 @@ namespace Tsavorite.core
                 PreallocateLog = PreallocateLog,
                 ReadCacheSettings = GetReadCacheSettings(),
                 MaxInlineKeySize = MaxInlineKeySize,
-                MaxInlineValueSize = MaxInlineValueSize
+                MaxInlineValueSize = MaxInlineValueSize,
+                PendingReadNoProgressLimit = PendingReadNoProgressLimit
             };
 
         private ReadCacheSettings GetReadCacheSettings()

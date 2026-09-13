@@ -585,6 +585,9 @@ namespace Tsavorite.core
 
         internal readonly ILogger logger;
 
+        /// <summary>See <see cref="LogSettings.PendingReadNoProgressLimit"/>.</summary>
+        private readonly int pendingReadNoProgressLimit;
+
         /// <summary>Instantiate base allocator implementation</summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         private protected AllocatorBase(AllocatorSettings allocatorSettings, TStoreFunctions storeFunctions, Func<object, TAllocator> wrapperCreator,
@@ -643,6 +646,10 @@ namespace Tsavorite.core
                 throw new TsavoriteException($"{nameof(logSettings.MaxInlineKeySize)} must be between {LogSettings.MinMaxInlineSize} and {LogSettings.MaxInlineKeySizeLimit}");
             if (logSettings.MaxInlineValueSize < LogSettings.MinMaxInlineSize || logSettings.MaxInlineValueSize > LogSettings.MaxInlineValueSizeLimit)
                 throw new TsavoriteException($"{nameof(logSettings.MaxInlineValueSize)} must be between {LogSettings.MinMaxInlineSize} and {LogSettings.MaxInlineValueSizeLimit}");
+
+            if (logSettings.PendingReadNoProgressLimit < 1)
+                throw new TsavoriteException($"{nameof(logSettings.PendingReadNoProgressLimit)} must be at least 1");
+            pendingReadNoProgressLimit = logSettings.PendingReadNoProgressLimit;
 
             this.logger = logger;
             if (logSettings.LogDevice == null)
@@ -2504,8 +2511,45 @@ namespace Tsavorite.core
         /// </summary>
         internal bool TryVerifyOrReissuePendingRead(ref AsyncIOContext ctx)
         {
+            // A DEVICE ERROR FAILS THE READ, THE FIRST TIME. This used to be logged and then handed to the verify below as
+            // if it were a short record, which re-issued the SAME address - and a device that refuses an address refuses it
+            // again, so the op never completed and the calling thread never returned (measured on a real store whose hash
+            // index points past the end of a segment file: 296,205 reads answered ERROR_HANDLE_EOF in 12 s). A tier that
+            // refuses a short read on purpose (RG's tiered device answers 38 so the engine fails the op) is only honoured if
+            // the engine stops here. The exception reaches the caller on both completion paths: the synchronous path's
+            // callback catch completes the event with it, and the session drain propagates it out of CompletePending.
+            if (ctx.deviceErrorCode != 0)
+                throw new TsavoriteException(
+                    $"Pending read of {AddressString(ctx.logicalAddress)} failed on the device: error code {ctx.deviceErrorCode}, " +
+                    $"{ctx.deviceBytes} byte(s) transferred. The record at this address cannot be read, so the read fails rather " +
+                    "than re-issuing: asking a device again for an address it refused does not produce the record.");
+
             if (!VerifyRecordFromDiskCallback(ref ctx, out var prevAddressToRead, out var prevLengthToRead))
             {
+                // THE SILENT CASE, BOUNDED: a re-read of the SAME address (an incomplete record) that the device answered
+                // with no error and no more bytes than the last attempt. A record legitimately arrives in at most two reads
+                // (the initial IO, then its known length), so a run of reads that makes no progress is a device that will
+                // not deliver the record; after pendingReadNoProgressLimit of them the read fails instead of spinning.
+                if (prevAddressToRead == ctx.logicalAddress)
+                {
+                    var available = ctx.record?.available_bytes ?? 0;
+                    if (ctx.noProgressAddress == prevAddressToRead && available <= ctx.noProgressAvailable)
+                    {
+                        if (++ctx.noProgressCount >= pendingReadNoProgressLimit)
+                            throw new TsavoriteException(
+                                $"Pending read of {AddressString(ctx.logicalAddress)} made no progress: {ctx.noProgressCount} read(s) of " +
+                                $"this address delivered {available} usable byte(s) each ({ctx.deviceBytes} transferred, no device error), " +
+                                $"short of a whole record. {nameof(LogSettings.PendingReadNoProgressLimit)} is {pendingReadNoProgressLimit}; " +
+                                "the read fails rather than re-issuing indefinitely.");
+                    }
+                    else
+                    {
+                        ctx.noProgressAddress = prevAddressToRead;
+                        ctx.noProgressAvailable = available;
+                        ctx.noProgressCount = 1;
+                    }
+                }
+
                 // Either we had an incomplete record (re-read the current record) or the key didn't match (read the
                 // previous record in the chain). If that address is in range, issue the read; else fall through to
                 // "IO complete" and let ContinuePending* detect the below-range case.
@@ -2525,11 +2569,19 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.NoInlining)]
         private void AsyncGetFromDiskCallback(uint errorCode, uint numBytes, object context)
         {
-            if (errorCode != 0)
-                logger?.LogError("AsyncGetFromDiskCallback error: {errorCode}", errorCode);
-
             // The AsyncIOContext is the object-context handed to the device; it comes back here directly.
             var ctx = (AsyncIOContext)context;
+            ctx.deviceErrorCode = errorCode;
+            ctx.deviceBytes = numBytes;
+            if (errorCode != 0)
+            {
+                // The address and byte count are what make this line actionable; the code alone named neither the record nor the shortfall.
+                logger?.LogError("AsyncGetFromDiskCallback error: {errorCode} reading {address} ({numBytes} byte(s) transferred)", errorCode, AddressString(ctx.logicalAddress), numBytes);
+                // An error completion's byte count is not a transfer the record buffer can be sized by; the op fails in
+                // TryVerifyOrReissuePendingRead before anything reads the buffer.
+                ctx.record.available_bytes = 0;
+                goto Dispatch;
+            }
 
             // available_bytes is the count of valid bytes starting at GetValidPointer() (= aligned_pointer + valid_offset),
             // so subtract valid_offset from the device's reported transfer count (total bytes written from aligned_pointer).
@@ -2537,7 +2589,9 @@ namespace Tsavorite.core
                 $"Expected numBytes ({numBytes}) <= (available_bytes ({ctx.record.available_bytes}) + valid_offset ({ctx.record.valid_offset})), per {nameof(GetAndPopulateReadBuffer)}()");
             Debug.Assert(numBytes >= (uint)ctx.record.valid_offset,
                 $"Short read: {numBytes} bytes were read, which is below the valid_offset ({ctx.record.valid_offset}); the record start was not delivered by the device");
-            ctx.record.available_bytes = (int)numBytes - ctx.record.valid_offset;
+            // Clamped: a device that answers with fewer bytes than the record start offset (a short or empty read with no
+            // error code) must read as "nothing usable", never as a negative length the verify below would reinterpret.
+            ctx.record.available_bytes = Math.Max(0, (int)numBytes - ctx.record.valid_offset);
 
             if (ctx.record.available_bytes >= RecordInfo.Size)
             {
@@ -2546,6 +2600,7 @@ namespace Tsavorite.core
                     $"Invalid records should not be in the hash chain for pending IO; address {ctx.logicalAddress}, recordInfo {recordInfo}");
             }
 
+        Dispatch:
             if (ctx.completionEvent is null)
             {
                 // Asynchronous path: keep the completion thread minimal — record the device result and hand the op
