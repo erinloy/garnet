@@ -489,6 +489,8 @@ namespace Tsavorite.devices
                         if (t.IsFaulted)
                         {
                             BlobManager?.StorageTracer?.TsavoriteStorageProgress($"StorageOpReturned AzureStorageDevice.ReadAsync id={id} (Failure)");
+                            // A FAILED READ NAMES ITS EXCEPTION, for the same reason the write above does.
+                            BlobManager?.HandleStorageError(nameof(ReadFromBlobAsync), $"read FAILED at source={sourceAddress} bytes={readLength} id={id}", blobEntry.PageBlob.Default?.Name, t.Exception, isFatal: false, isWarning: false);
                             request.Callback(uint.MaxValue, request.NumBytes, request.Context);
                         }
                         else
@@ -672,6 +674,13 @@ namespace Tsavorite.devices
                         if (t.IsFaulted)
                         {
                             BlobManager?.StorageTracer?.TsavoriteStorageProgress($"StorageOpReturned AzureStorageDevice.WriteAsync id={id} (Failure)");
+                            // A FAILED WRITE NAMES ITS EXCEPTION. uint.MaxValue is the only thing IDevice can hand back, and
+                            // every layer above turns it into a number: the tiered device reports it as the first error and
+                            // Tsavorite's overflow-bucket flush ends as "failed with error code -1". Measured 2026-09-14 on
+                            // the webfrontend: six consecutive index checkpoints failed that way with the cause discarded
+                            // here, so the store could not persist and nothing said why. The task's exception is the only
+                            // record of the cause and it lived exactly this long.
+                            BlobManager?.HandleStorageError(nameof(WriteToBlobAsync), $"write FAILED at destination={destinationAddress} bytes={numBytesToWrite} id={id}", blobEntry.PageBlob.Default?.Name, t.Exception, isFatal: false, isWarning: false);
                             request.Callback(uint.MaxValue, request.NumBytes, request.Context);
                         }
                         else
