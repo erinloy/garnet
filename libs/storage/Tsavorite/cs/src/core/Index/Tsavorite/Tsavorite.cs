@@ -1046,5 +1046,113 @@ namespace Tsavorite.core
         {
             return DumpDistributionInternal(resizeInfo.version);
         }
+
+        /// <summary>
+        /// Sampled variant of <see cref="DumpDistribution"/>: walks <paramref name="maxBuckets"/> buckets taken at a fixed
+        /// deterministic stride (table size divided by the sample size — no RNG, so repeated calls on an unchanged table
+        /// produce identical reports). Cost is O(sample), which makes it affordable on tables far larger than anyone should
+        /// habitually whole-table-walk; it exists for DIAGNOSIS — "are this table's chains long, and is that inflation from
+        /// past doublings or genuine load" — a question no allocation counter can answer.
+        /// <para>⚖️ The report publishes RAW sample counts and states K up front. It deliberately does NOT extrapolate: scaling
+        /// a K-bucket sample up to the table is the caller's sin, and over-reading a number is how this engine built a growth
+        /// loop from its own history (2026-09-16, the IndexOverflowBuckets retraction). This method must never become a trigger
+        /// input without a gate proving it cannot feed itself the way the overflow counter did.</para>
+        /// </summary>
+        /// <param name="maxBuckets">K — the number of buckets to sample; if ≥ table size, the whole table is walked.</param>
+        public unsafe string DumpDistributionSampled(long maxBuckets)
+        {
+            var version = resizeInfo.version;
+            var table_size_ = state[version].size;
+            var ptable_ = state[version].tableAligned;
+            var sample_size = maxBuckets >= table_size_ ? table_size_ : maxBuckets;
+            var stride = table_size_ / sample_size;
+            if (stride == 0) { stride = 1; sample_size = table_size_; }
+
+            long beginAddress = hlogBase.BeginAddress;
+            long total_valid_entries = 0;
+            long total_valid_entries_in_ofb = 0;
+            long total_zeroed_out_slots = 0;
+            long total_entries_below_begin_address = 0;
+            long total_entries_with_tentative_bit_set = 0;
+            Dictionary<int, long> occupancy_histogram = new();
+            Dictionary<int, long> ofb_depth_histogram = new();
+
+            for (long sample_index = 0; sample_index < sample_size; sample_index++)
+            {
+                long bucket = sample_index * stride;
+                HashBucket b = *(ptable_ + bucket);
+                int valid_in_this_bucket = 0;
+                int valid_in_ofb_in_this_bucket = 0;
+                int ofb_chain_depth = 0;
+                bool in_overflow = false;
+                List<ushort> tags = new();
+
+                while (true)
+                {
+                    for (int bucket_entry = 0; bucket_entry < Constants.kOverflowBucketIndex; bucket_entry++)
+                    {
+                        var x = default(HashBucketEntry);
+                        x.word = b.bucket_entries[bucket_entry];
+
+                        if (x.Tentative)
+                            ++total_entries_with_tentative_bit_set;
+
+                        if (((!x.IsReadCache) && (x.Address >= beginAddress)) || (x.IsReadCache && (x.Address >= readcacheBase.HeadAddress)))
+                        {
+                            // A duplicate tag inside ONE chain is real, even in a sample — the chain is walked whole.
+                            if (tags.Contains(x.Tag) && !x.Tentative)
+                                throw new TsavoriteException("Duplicate tag found in index");
+                            tags.Add(x.Tag);
+                            ++valid_in_this_bucket;
+                            ++total_valid_entries;
+
+                            if (in_overflow)
+                                ++valid_in_ofb_in_this_bucket;
+                        }
+                        else if (x.word != default)
+                        {
+                            ++total_entries_below_begin_address;
+                        }
+                        else
+                        {
+                            ++total_zeroed_out_slots;
+                        }
+                    }
+
+                    if ((b.bucket_entries[Constants.kOverflowBucketIndex] & kAddressBitMask) == 0)
+                        break;
+
+                    b = *(HashBucket*)overflowBucketsAllocator.GetPhysicalAddress(b.bucket_entries[Constants.kOverflowBucketIndex] & kAddressBitMask);
+                    in_overflow = true;
+                    ++ofb_chain_depth;
+                }
+
+                if (!occupancy_histogram.ContainsKey(valid_in_this_bucket)) occupancy_histogram[valid_in_this_bucket] = 0;
+                occupancy_histogram[valid_in_this_bucket]++;
+                if (!ofb_depth_histogram.ContainsKey(ofb_chain_depth)) ofb_depth_histogram[ofb_chain_depth] = 0;
+                ofb_depth_histogram[ofb_chain_depth]++;
+                total_valid_entries_in_ofb += valid_in_ofb_in_this_bucket;
+            }
+
+            var report =
+                $"SAMPLED index distribution — K stated, raw counts, no extrapolation:\r\n" +
+                $"  Sample: {sample_size} of {table_size_} buckets (stride {stride})\r\n" +
+                $"  Number of overflow buckets (whole table, allocation counter): {OverflowBucketCount}\r\n" +
+                $"  Valid entries seen in sample: {total_valid_entries}\r\n" +
+                $"  Average #entries per SAMPLED bucket: {{{total_valid_entries / (double)sample_size:0.00}}}\r\n" +
+                $"  Valid entries in overflow buckets (sample): {total_valid_entries_in_ofb}\r\n" +
+                $"  Zeroed-out slots (sample): {total_zeroed_out_slots}\r\n" +
+                $"  Entries below begin addr (sample): {total_entries_below_begin_address}\r\n" +
+                $"  Entries with tentative bit set (sample): {total_entries_with_tentative_bit_set}\r\n" +
+                $"  Histogram of #entries per sampled bucket:\r\n";
+
+            foreach (var kvp in occupancy_histogram.OrderBy(e => e.Key))
+                report += $"    {kvp.Key} : {kvp.Value}\r\n";
+            report += $"  Histogram of overflow chain depth per sampled bucket:\r\n";
+            foreach (var kvp in ofb_depth_histogram.OrderBy(e => e.Key))
+                report += $"    {kvp.Key} : {kvp.Value}\r\n";
+
+            return report;
+        }
     }
 }
