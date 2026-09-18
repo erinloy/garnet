@@ -421,10 +421,10 @@ namespace Tsavorite.core
             // Falls back to File.OpenHandle on non-Linux or if O_DIRECT is unsupported by the underlying
             // filesystem. Both paths return a SafeFileHandle consumed by RandomAccess.{Read,Write}Async.
             SafeFileHandle logReadHandle;
-            if (!TryOpenDirectHandle(segmentId, FileAccess.Read, createIfMissing: true, out logReadHandle))
+            if (!TryOpenDirectHandle(segmentId, FileAccess.Read, createIfMissing: false, out logReadHandle))
             {
                 logReadHandle = File.OpenHandle(
-                    GetSegmentName(segmentId), FileMode.OpenOrCreate,
+                    GetSegmentName(segmentId), FileMode.Open,
                     FileAccess.Read, readOnly ? FileShare.Read : FileShare.ReadWrite, fo);
             }
 

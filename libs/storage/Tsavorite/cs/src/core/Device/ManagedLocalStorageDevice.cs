@@ -126,7 +126,7 @@ namespace Tsavorite.core
                 }
                 prevSegmentId = segmentId;
             }
-            // No need to populate map because logHandles use Open or create on files.
+            // No need to populate map because write handles create their files on demand; read handles open only what writes (or recovery) already created — a read at a segment with no file fails loudly instead of planting an empty one.
         }
 
         /// <summary>
@@ -416,7 +416,7 @@ namespace Tsavorite.core
                 fo |= (FileOptions)FILE_FLAG_NO_BUFFERING;
 
             var logReadHandle = new FileStream(
-                GetSegmentName(segmentId), FileMode.OpenOrCreate,
+                GetSegmentName(segmentId), FileMode.Open,
                 FileAccess.Read, readOnly ? FileShare.Read : FileShare.ReadWrite, 512, fo);
 
             return logReadHandle;

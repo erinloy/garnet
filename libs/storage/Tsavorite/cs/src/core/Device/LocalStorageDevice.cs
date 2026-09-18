@@ -209,7 +209,7 @@ namespace Tsavorite.core
                 }
                 prevSegmentId = segmentId;
             }
-            // No need to populate map because logHandles use Open or create on files.
+            // No need to populate map because write handles create their segment files on demand; read handles open only what writes (or recovery) already created — a read at a segment with no file fails loudly instead of planting an empty one.
         }
 
         /// <summary>
@@ -243,7 +243,7 @@ namespace Tsavorite.core
 
             try
             {
-                var logHandle = GetOrAddHandle(segmentId);
+                var logHandle = GetOrAddReadHandle(segmentId);
 
                 Interlocked.Increment(ref numPending);
 
@@ -428,11 +428,11 @@ namespace Tsavorite.core
         /// <summary>
         /// Creates a SafeFileHandle for the specified segment. This can be used by derived classes to prepopulate logHandles in the constructor.
         /// </summary>
-        protected internal static SafeFileHandle CreateHandle(int segmentId, bool disableFileBuffering, bool deleteOnClose, bool preallocateFile, long segmentSize, string fileName, IntPtr ioCompletionPort, bool omitSegmentId = false, bool readOnly = false)
+        protected internal static SafeFileHandle CreateHandle(int segmentId, bool disableFileBuffering, bool deleteOnClose, bool preallocateFile, long segmentSize, string fileName, IntPtr ioCompletionPort, bool omitSegmentId = false, bool readOnly = false, bool createIfMissing = true)
         {
             uint fileAccess = readOnly ? Native32.GENERIC_READ : Native32.GENERIC_READ | Native32.GENERIC_WRITE;
             uint fileShare = unchecked(((uint)FileShare.ReadWrite & ~(uint)FileShare.Inheritable));
-            uint fileCreation = unchecked((uint)FileMode.OpenOrCreate);
+            uint fileCreation = unchecked((uint)(createIfMissing ? FileMode.OpenOrCreate : FileMode.Open));
             uint fileFlags = Native32.FILE_FLAG_OVERLAPPED;
 
             if (disableFileBuffering)
@@ -462,6 +462,10 @@ namespace Tsavorite.core
                 var message = $"Error creating log file for {segmentFileName}, error: {error} 0x({Native32.MakeHRFromErrorCode(error)})";
                 if (error == Native32.ERROR_PATH_NOT_FOUND)
                     message += $" (Path not found; name length = {segmentFileName.Length}, MAX_PATH = {Native32.WIN32_MAX_PATH}";
+                if (!createIfMissing && (error == Native32.ERROR_FILE_NOT_FOUND || error == Native32.ERROR_PATH_NOT_FOUND))
+                    throw new FileNotFoundException(
+                        $"A read at segment {segmentId} refused to materialize '{segmentFileName}' — the log has no such segment, so an out-of-range address reached the device",
+                        segmentFileName);
                 throw new IOException(message);
             }
 
@@ -501,13 +505,19 @@ namespace Tsavorite.core
         /// <returns></returns>
         // Can be used to pre-load handles, e.g., after a checkpoint
         protected SafeFileHandle GetOrAddHandle(int _segmentId)
+            => GetOrAddHandle(_segmentId, CreateHandle);
+
+        private SafeFileHandle GetOrAddReadHandle(int _segmentId)
+            => GetOrAddHandle(_segmentId, CreateExistingHandle);
+
+        protected SafeFileHandle GetOrAddHandle(int _segmentId, Func<int, SafeFileHandle> handleFactory)
         {
             if (logHandles.TryGetValue(_segmentId, out SafeFileHandle h))
             {
                 return h;
             }
             if (_disposed) return null;
-            var result = logHandles.GetOrAdd(_segmentId, CreateHandle);
+            var result = logHandles.GetOrAdd(_segmentId, handleFactory);
             if (_disposed)
             {
                 foreach (var logHandle in logHandles.Values)
@@ -519,6 +529,9 @@ namespace Tsavorite.core
 
         private SafeFileHandle CreateHandle(int segmentId)
             => CreateHandle(segmentId, disableFileBuffering, deleteOnClose, preallocateFile, segmentSize, FileName, ioCompletionPort);
+
+        private SafeFileHandle CreateExistingHandle(int segmentId)
+            => CreateHandle(segmentId, disableFileBuffering, deleteOnClose, preallocateFile, segmentSize, FileName, ioCompletionPort, OmitSegmentIdFromFileName, readOnly, createIfMissing: false);
 
         /// Sets file size to the specified value.
         /// Does not reset file seek pointer to original location.

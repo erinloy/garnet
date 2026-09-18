@@ -81,6 +81,7 @@ namespace Tsavorite.core
 
         #region io constants and flags
         internal const int ERROR_IO_PENDING = 997;
+        internal const int ERROR_FILE_NOT_FOUND = 2;
         internal const int ERROR_PATH_NOT_FOUND = 3;
         internal const int WIN32_MAX_PATH = 260;
         internal const uint GENERIC_READ = 0x80000000;
