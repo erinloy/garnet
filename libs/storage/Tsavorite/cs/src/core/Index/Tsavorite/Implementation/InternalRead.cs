@@ -86,6 +86,11 @@ namespace Tsavorite.core
                 {
                     if (FindInReadCache(key, ref stackCtx, minAddress: kInvalidAddress, alwaysFindLatestLA: false))
                     {
+                        // The accelerator's path counter: this read is served from the read cache, so increment
+                        // the hit count. Only answers cost the same either way — the path is the observable here
+                        // (see ReadCacheHits; the miss denominator is the caller's pending/disk-read count).
+                        System.Threading.Interlocked.Increment(ref _readCacheHits);
+
                         // Note: When session is in PREPARE phase, a read-cache record cannot be new-version. This is because a new-version record
                         // insertion would have invalidated the read-cache entry, and before the new-version record can go to disk become eligible
                         // to enter the read-cache, the PREPARE phase for that session will be over due to an epoch refresh.

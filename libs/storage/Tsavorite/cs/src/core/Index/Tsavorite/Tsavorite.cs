@@ -86,6 +86,17 @@ namespace Tsavorite.core
         public long OverflowBucketAllocations => overflowBucketsAllocator.NumAllocations;
 
         /// <summary>
+        /// Reads served from the READ CACHE — the accelerator's path counter. Incremented only where a Read finds
+        /// and serves a read-cache record (InternalRead's FindInReadCache arm), so the hit rate has a numerator
+        /// beside the caller's disk-read denominator. An accelerator that changes COST and not RESULT cannot be
+        /// proven to run by any answer-based test: with this counter absent, flipping the promotion default to
+        /// None leaves every answer correct, every test green, and the cell slower for reasons nobody can
+        /// attribute — a stopped counter is the only detector that shape of failure has.
+        /// </summary>
+        public long ReadCacheHits => System.Threading.Interlocked.Read(ref _readCacheHits);
+        private long _readCacheHits;
+
+        /// <summary>
         /// Hybrid log used by this Tsavorite instance
         /// </summary>
         public LogAccessor<TStoreFunctions, TAllocator> Log { get; }
