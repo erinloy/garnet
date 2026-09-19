@@ -196,17 +196,29 @@ namespace Tsavorite.core
             }
             segids.Sort();
 
-            int prevSegmentId = -1;
+            // THE RECOVERED RANGE IS THE CONTIGUOUS RUN FROM THE LOWEST SEGMENT — never a segment index past the tail.
+            // The old walk adopted any LATER segment after a gap as a new start ("if (segmentId != prev + 1) startSegment =
+            // segmentId"), a rule written for a truncated log whose files are exactly [N..M] and never imagined a hole BELOW
+            // a later stray: with files {0,1,2,99785} it set startSegment=99785 while endSegment stayed 2, and the next open
+            // threw "Unable to set first valid segment to 0, first available segment on disk is 99785" — the fault that took
+            // the live router down ~40 minutes (hlog.log.99785, zero bytes, measured 2026-09-18: something created a segment
+            // index past the tail, and recovery then ADOPTED it as the log\u0027s start). A segment file above a gap is not part
+            // of any log this device can serve — adopting its index names a first-available segment past the real tail, and
+            // naming it loudly is the only honest alternative to refusing an open that has a real, contiguous log beneath it.
+            if (segids.Count == 0) return;
+            startSegment = segids[0];
+            endSegment = segids[0];
+            int prevSegmentId = segids[0];
             foreach (int segmentId in segids)
             {
-                if (segmentId != prevSegmentId + 1)
+                if (segmentId > prevSegmentId + 1)
                 {
-                    startSegment = segmentId;
+                    logger?.LogWarning(
+                        "RecoverFiles: ignoring segment files {{{0}..{1}}} — they sit above a gap in the recovered run {{{2}..{3}}}, and the far side of a gap is never this log\u0027s extent. A segment index past the tail is neither created nor adopted as first-available.",
+                        prevSegmentId + 1, segids[^1], startSegment, endSegment);
+                    break;
                 }
-                else
-                {
-                    endSegment = segmentId;
-                }
+                endSegment = segmentId;
                 prevSegmentId = segmentId;
             }
             // No need to populate map because write handles create their segment files on demand; read handles open only what writes (or recovery) already created — a read at a segment with no file fails loudly instead of planting an empty one.
