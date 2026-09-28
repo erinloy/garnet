@@ -2546,6 +2546,17 @@ namespace Tsavorite.core
                     $"{ctx.deviceBytes} byte(s) transferred. The record at this address cannot be read, so the read fails rather " +
                     "than re-issuing: asking a device again for an address it refused does not produce the record.");
 
+            // AN ADDRESS NO DISK RECORD CAN HOLD ENDS THE CHAIN. A chain link of -1 masked to 48 bits reads as rc:0x7FFFFFFFFFFF: it
+            // passes the >= BeginAddress re-issue test, the device answers past its end with a few bytes, and the no-progress
+            // limit below threw out of a replay scan (webfrontend 2026-09-28, three boot crashes in 25 min). The disk log holds
+            // no read-cache address and nothing at or past the tail, so the op resolves below range: not found, and logged.
+            if (IsReadCache(ctx.logicalAddress) || AbsoluteAddress(ctx.logicalAddress) >= GetTailAddress())
+            {
+                logger?.LogWarning("Pending read of {address} is past the log (tail {tail}) or in the read cache: a broken chain link, read as not found", AddressString(ctx.logicalAddress), AddressString(GetTailAddress()));
+                ctx.logicalAddress = kInvalidAddress;
+                return true;
+            }
+
             if (!VerifyRecordFromDiskCallback(ref ctx, out var prevAddressToRead, out var prevLengthToRead))
             {
                 // THE SILENT CASE, BOUNDED: a re-read of the SAME address (an incomplete record) that the device answered
@@ -2576,7 +2587,9 @@ namespace Tsavorite.core
                 // previous record in the chain). If that address is in range, issue the read; else fall through to
                 // "IO complete" and let ContinuePending* detect the below-range case.
                 ctx.logicalAddress = prevAddressToRead;
-                if (ctx.logicalAddress >= BeginAddress && ctx.logicalAddress >= ctx.minAddress)
+                if (IsReadCache(ctx.logicalAddress) || AbsoluteAddress(ctx.logicalAddress) >= GetTailAddress())
+                    ctx.logicalAddress = kInvalidAddress;   // a broken link, as above: resolve below range instead of issuing it
+                else if (ctx.logicalAddress >= BeginAddress && ctx.logicalAddress >= ctx.minAddress)
                 {
                     _wrapper.OnDisposeDiskRecord(ref ctx.diskLogRecord, DisposeReason.DeserializedFromDisk);
                     ctx.DisposeRecord();
