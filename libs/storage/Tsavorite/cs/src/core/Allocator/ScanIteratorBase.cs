@@ -125,6 +125,8 @@ namespace Tsavorite.core
                 frameSize = 1;
             else if (diskScanBufferingMode == DiskScanBufferingMode.DoublePageBuffering)
                 frameSize = 2;
+            else if (diskScanBufferingMode == DiskScanBufferingMode.MultiPageBuffering)
+                frameSize = ScanReadAhead.Frames(logPageSizeBits);
             else if (diskScanBufferingMode == DiskScanBufferingMode.NoBuffering)
             {
                 frameSize = 0;

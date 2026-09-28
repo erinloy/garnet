@@ -23,7 +23,22 @@ namespace Tsavorite.core
         /// <summary>
         /// Do not buffer - with this mode, you can only scan records already in main memory
         /// </summary>
-        NoBuffering
+        NoBuffering,
+
+        /// <summary>
+        /// Buffer the current page and read ahead as many pages as fit <see cref="ScanReadAhead.Bytes"/> (at least two): a device
+        /// whose reads are slow but concurrent (a remote tier) is read with that many pages in flight instead of one.
+        /// </summary>
+        MultiPageBuffering
+    }
+
+    /// <summary>The read-ahead budget of <see cref="DiskScanBufferingMode.MultiPageBuffering"/>.</summary>
+    public static class ScanReadAhead
+    {
+        /// <summary>Bytes of pages a multi-page scan holds in flight; frames = Bytes / page size, clamped to [2, 256].</summary>
+        public static long Bytes = 32L << 20;
+
+        internal static int Frames(int logPageSizeBits) => (int)Math.Clamp(Bytes >> logPageSizeBits, 2, 256);
     }
 
     /// <summary>
