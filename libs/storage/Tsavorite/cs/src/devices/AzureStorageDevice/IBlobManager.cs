@@ -55,7 +55,8 @@ namespace Tsavorite.devices
             int expectedLatencyBound,
             bool isCritical,
             Func<int, Task<long>> operationAsync,
-            Func<Task> readETagAsync = null);
+            Func<Task> readETagAsync = null,
+            CancellationToken operationToken = default);
 
         /// <summary>
         /// Confirm lease is good for a while

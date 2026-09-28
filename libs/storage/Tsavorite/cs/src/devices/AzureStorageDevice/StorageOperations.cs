@@ -21,13 +21,16 @@ namespace Tsavorite.devices
             int expectedLatencyBound,
             bool isCritical,
             Func<int, Task<long>> operationAsync,
-            Func<Task> readETagAsync = null)
+            Func<Task> readETagAsync = null,
+            CancellationToken operationToken = default)
         {
+            bool acquired = false;
             try
             {
                 if (semaphore != null)
                 {
-                    await semaphore.WaitAsync().ConfigureAwait(false);
+                    await semaphore.WaitAsync(operationToken).ConfigureAwait(false);
+                    acquired = true;
                 }
 
                 Stopwatch stopwatch = new();
@@ -72,6 +75,12 @@ namespace Tsavorite.devices
 
                         return;
                     }
+                    catch (OperationCanceledException e) when (operationToken.IsCancellationRequested && !StorageErrorHandler.IsTerminated)
+                    {
+                        // ZILTCH: this one operation was abandoned (the device's hang limit); it fails as itself and the device lives on.
+                        HandleStorageError(name, $"storage operation {name} ({intent}) was abandoned on attempt {numAttempts}", target, e, false, true);
+                        throw;
+                    }
                     catch (Exception e) when (StorageErrorHandler.IsTerminated)
                     {
                         string message = $"storage operation {name} ({intent}) was canceled";
@@ -90,7 +99,7 @@ namespace Tsavorite.devices
                         {
                             TimeSpan nextRetryIn = GetDelayBetweenRetries(numAttempts);
                             HandleStorageError(name, $"storage operation {name} ({intent}) failed transiently on attempt {numAttempts}, retry in {nextRetryIn}s", target, e, false, true);
-                            await Task.Delay(nextRetryIn).ConfigureAwait(false);
+                            await Task.Delay(nextRetryIn, operationToken).ConfigureAwait(false);
                         }
                         continue;
                     }
@@ -116,7 +125,7 @@ namespace Tsavorite.devices
             }
             finally
             {
-                semaphore?.Release();
+                if (acquired) semaphore.Release();
             }
         }
     }

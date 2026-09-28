@@ -44,6 +44,7 @@ namespace Tsavorite.devices
             public uint NumBytes;
             public object Context;
             public DateTime TimeStamp;
+            public CancellationTokenSource Cancel;
         }
 
         struct RemoveRequestInfo
@@ -259,26 +260,37 @@ namespace Tsavorite.devices
 
         string GetSegmentBlobName(int segmentId) => GetSegmentFilename(blobName, segmentId);
 
+        // ZILTCH: a hung operation is abandoned by its own token and fails as itself. Terminating the device instead cancelled
+        // every later read and write of the process (webfrontend 2026-09-28: 63 cancelled blob reads a minute after one hang).
         internal void DetectHangs(object _)
         {
             DateTime threshold = DateTime.UtcNow - (Debugger.IsAttached ? TimeSpan.FromMinutes(30) : limit);
 
             foreach (var kvp in pendingReadWriteOperations)
             {
-                if (kvp.Value.TimeStamp < threshold)
+                if (kvp.Value.TimeStamp < threshold && kvp.Value.Cancel is { IsCancellationRequested: false } cancel)
                 {
-                    BlobManager.StorageErrorHandler.HandleError("DetectHangs", $"storage operation id={kvp.Key} has exceeded the time limit {limit}", null, true, false);
-                    return;
+                    BlobManager.StorageErrorHandler.HandleError("DetectHangs", $"storage operation id={kvp.Key} has exceeded the time limit {limit}; it is abandoned and fails as itself", null, false, true);
+                    try { cancel.Cancel(); } catch (ObjectDisposedException) { }
                 }
             }
             foreach (var kvp in pendingRemoveOperations)
             {
                 if (kvp.Value.TimeStamp < threshold)
                 {
-                    BlobManager.StorageErrorHandler.HandleError("DetectHangs", $"storage operation id={kvp.Key} has exceeded the time limit {limit}", null, true, false);
+                    BlobManager.StorageErrorHandler.HandleError("DetectHangs", $"storage operation id={kvp.Key} has exceeded the time limit {limit}", null, false, true);
                     return;
                 }
             }
+        }
+
+        CancellationToken TokenOf(long id)
+            => pendingReadWriteOperations.TryGetValue(id, out var request) && request.Cancel != null ? request.Cancel.Token : StorageErrorHandler.Token;
+
+        CancellationTokenSource NewOperationCancel()
+        {
+            try { return CancellationTokenSource.CreateLinkedTokenSource(StorageErrorHandler.Token); }
+            catch (ObjectDisposedException) { return null; }
         }
 
         void CancelAllRequests()
@@ -442,7 +454,8 @@ namespace Tsavorite.devices
                 Callback = callback,
                 NumBytes = readLength,
                 Context = context,
-                TimeStamp = DateTime.UtcNow
+                TimeStamp = DateTime.UtcNow,
+                Cancel = NewOperationCancel()
             });
 
             // Lazily cache the blob entry for the segment being read
@@ -486,7 +499,8 @@ namespace Tsavorite.devices
                 {
                     if (pendingReadWriteOperations.TryRemove(id, out ReadWriteRequestInfo request))
                     {
-                        if (t.IsFaulted)
+                        request.Cancel?.Dispose();
+                        if (t.IsFaulted || t.IsCanceled)
                         {
                             BlobManager?.StorageTracer?.TsavoriteStorageProgress($"StorageOpReturned AzureStorageDevice.ReadAsync id={id} (Failure)");
                             // A FAILED READ NAMES ITS EXCEPTION, for the same reason the write above does.
@@ -517,7 +531,8 @@ namespace Tsavorite.devices
                 Callback = callback,
                 NumBytes = numBytesToWrite,
                 Context = context,
-                TimeStamp = DateTime.UtcNow
+                TimeStamp = DateTime.UtcNow,
+                Cancel = NewOperationCancel()
             });
 
             if (!blobs.TryGetValue(segmentId, out BlobEntry blobEntry))
@@ -549,6 +564,7 @@ namespace Tsavorite.devices
 
         async Task WritePortionToBlobAsync(UnmanagedMemoryStream stream, BlobEntry blobEntry, IntPtr sourceAddress, long destinationAddress, long offset, uint length, long id)
         {
+            var token = TokenOf(id);
             using (stream)
             {
                 long originalStreamPosition = stream.Position;
@@ -578,7 +594,7 @@ namespace Tsavorite.devices
                                  transactionalContentHash: null,
                                  conditions: underLease ? new PageBlobRequestConditions() { IfMatch = blobEntry.ETag } : null,
                                  progressHandler: null,
-                                 cancellationToken: StorageErrorHandler.Token).ConfigureAwait(false);
+                                 cancellationToken: token).ConfigureAwait(false);
 
                             blobEntry.ETag = response.Value.ETag;
                         }
@@ -587,10 +603,10 @@ namespace Tsavorite.devices
                     },
                     async () =>
                     {
-                        var response = await blobEntry.PageBlob.Default.GetPropertiesAsync().ConfigureAwait(false);
+                        var response = await blobEntry.PageBlob.Default.GetPropertiesAsync(cancellationToken: token).ConfigureAwait(false);
                         blobEntry.ETag = response.Value.ETag;
 
-                    }).ConfigureAwait(false);
+                    }, token).ConfigureAwait(false);
             }
         }
 
@@ -601,6 +617,7 @@ namespace Tsavorite.devices
 
         async Task ReadFromBlobAsync(UnmanagedMemoryStream stream, BlobEntry blob, long sourceAddress, uint readLength, long id)
         {
+            var token = TokenOf(id);
             using (stream)
             {
                 long offset = 0;
@@ -632,10 +649,10 @@ namespace Tsavorite.devices
                                     range: new Azure.HttpRange(sourceAddress + offset, length),
                                     conditions: null,
                                     rangeGetContentHash: false,
-                                    cancellationToken: StorageErrorHandler.Token)
+                                    cancellationToken: token)
                                     .ConfigureAwait(false);
 
-                                await response.Value.Content.CopyToAsync(stream).ConfigureAwait(false);
+                                await response.Value.Content.CopyToAsync(stream, token).ConfigureAwait(false);
                             }
 
                             if (stream.Position != offset + length)
@@ -644,7 +661,7 @@ namespace Tsavorite.devices
                             }
 
                             return length;
-                        }).ConfigureAwait(false);
+                        }, operationToken: token).ConfigureAwait(false);
 
                     readLength -= length;
                     offset += length;
@@ -671,7 +688,8 @@ namespace Tsavorite.devices
                 {
                     if (pendingReadWriteOperations.TryRemove(id, out ReadWriteRequestInfo request))
                     {
-                        if (t.IsFaulted)
+                        request.Cancel?.Dispose();
+                        if (t.IsFaulted || t.IsCanceled)
                         {
                             BlobManager?.StorageTracer?.TsavoriteStorageProgress($"StorageOpReturned AzureStorageDevice.WriteAsync id={id} (Failure)");
                             // A FAILED WRITE NAMES ITS EXCEPTION. uint.MaxValue is the only thing IDevice can hand back, and
