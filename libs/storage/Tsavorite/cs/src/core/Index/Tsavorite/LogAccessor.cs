@@ -49,6 +49,9 @@ namespace Tsavorite.core
         /// </summary>
         public long FlushedUntilAddress => allocatorBase.FlushedUntilAddress;
 
+        /// <summary>The standing flush fault, once a page flush has failed past its retry limit (every checkpoint then fails); null while healthy.</summary>
+        public TsavoriteFlushFaultException FlushFault => allocatorBase.FlushFault;
+
         /// <summary>
         /// Head address of log, i.e. beginning of in-memory regions
         /// </summary>
