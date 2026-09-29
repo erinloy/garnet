@@ -2572,7 +2572,7 @@ namespace Tsavorite.core
                             throw new TsavoriteException(
                                 $"Pending read of {AddressString(ctx.logicalAddress)} made no progress: {ctx.noProgressCount} read(s) of " +
                                 $"this address delivered {available} usable byte(s) each ({ctx.deviceBytes} transferred, no device error), " +
-                                $"short of a whole record. {nameof(LogSettings.PendingReadNoProgressLimit)} is {pendingReadNoProgressLimit}; " +
+                                $"short of the {prevLengthToRead} byte(s) the record's header asks for. {nameof(LogSettings.PendingReadNoProgressLimit)} is {pendingReadNoProgressLimit}; " +
                                 "the read fails rather than re-issuing indefinitely.");
                     }
                     else
