@@ -65,6 +65,8 @@ namespace Tsavorite.devices
         // Also, this allows us to use aggressive timeouts to kill stragglers
         const uint MAX_UPLOAD_SIZE = 1024 * 1024;
         const uint MAX_DOWNLOAD_SIZE = 1024 * 1024;
+        // The aggressive client times a round trip (2 s server, 3 s network); a larger transfer on a slow link cannot meet it.
+        const uint MAX_AGGRESSIVE_TRANSFER = 64 * 1024;
 
         const long MAX_PAGEBLOB_SIZE = 512L * 1024 * 1024 * 1024; // set this at 512 GB for now TODO consider implications
 
@@ -586,7 +588,7 @@ namespace Tsavorite.devices
 
                         if (length > 0)
                         {
-                            var client = numAttempts > 2 ? blobEntry.PageBlob.Default : blobEntry.PageBlob.Aggressive;
+                            var client = numAttempts > 2 || length > MAX_AGGRESSIVE_TRANSFER ? blobEntry.PageBlob.Default : blobEntry.PageBlob.Aggressive;
 
                             var response = await client.UploadPagesAsync(
                                  content: stream,
@@ -643,7 +645,7 @@ namespace Tsavorite.devices
 
                             if (length > 0)
                             {
-                                var client = (numAttempts > 1 || length == MAX_DOWNLOAD_SIZE) ? blob.PageBlob.Default : blob.PageBlob.Aggressive;
+                                var client = (numAttempts > 1 || length > MAX_AGGRESSIVE_TRANSFER) ? blob.PageBlob.Default : blob.PageBlob.Aggressive;
 
                                 var response = await client.DownloadStreamingAsync(
                                     range: new Azure.HttpRange(sourceAddress + offset, length),
