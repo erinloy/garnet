@@ -121,7 +121,7 @@ namespace Tsavorite.core
                     // Mutable region (even fuzzy region is included here)
                     srcLogRecord = stackCtx.recSrc.CreateLogRecord();
                     if (srcLogRecord.Info.IsClosedOrTombstoned(ref status))
-                        return status;
+                        return status == OperationStatus.NOTFOUND ? operationState.TombstoneNotFound : status;
 
                     return sessionFunctions.Reader(in srcLogRecord, ref input, ref output, ref readInfo)
                         ? OperationStatus.SUCCESS
@@ -133,7 +133,7 @@ namespace Tsavorite.core
                     // Immutable region
                     srcLogRecord = stackCtx.recSrc.CreateLogRecord();
                     if (srcLogRecord.Info.IsClosedOrTombstoned(ref status))
-                        return status;
+                        return status == OperationStatus.NOTFOUND ? operationState.TombstoneNotFound : status;
 
                     if (sessionFunctions.Reader(in srcLogRecord, ref input, ref output, ref readInfo))
                     {

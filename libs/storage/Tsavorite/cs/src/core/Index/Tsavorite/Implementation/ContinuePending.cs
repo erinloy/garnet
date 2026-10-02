@@ -94,7 +94,7 @@ namespace Tsavorite.core
                         {
                             memoryRecord = stackCtx.recSrc.CreateLogRecord();
                             if (memoryRecord.Info.Tombstone)
-                                goto NotFound;
+                                return operationState.TombstoneNotFound;
 
                             // V threads cannot access V+1 records. Use the latest logical address rather than the traced address (logicalAddress) per comments in AcquireCPRLatchRMW.
                             if (sessionFunctions.Ctx.phase == Phase.PREPARE && IsEntryVersionNew(ref stackCtx.hei.entry))
@@ -168,7 +168,7 @@ namespace Tsavorite.core
                             // Be consistent with InternalReadAtAddress and return the tombstoned record we retrieved from disk.
                             _ = sessionFunctions.Reader(in pendingState.diskLogRecord, ref pendingState.input.Get(), ref pendingState.output, ref readInfo);
                         }
-                        goto NotFound;
+                        return operationState.TombstoneNotFound;
                     }
 
                     var success = false;

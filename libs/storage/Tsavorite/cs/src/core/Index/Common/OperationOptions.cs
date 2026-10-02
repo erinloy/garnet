@@ -100,6 +100,12 @@ namespace Tsavorite.core
         /// </summary>
         public int InitialIORecordSize { get; set; } = KVSettings.UseDefaultInitialIORecordSize;
 
+        /// <summary>
+        /// When true, a NotFound read that ended on the key's tombstone also reports <see cref="Status.IsTombstoned"/>, so a caller
+        /// over two tiers (F2: hot log over cold log) can tell "deleted" (stop) from "never written here" (ask the next tier).
+        /// </summary>
+        public bool ReportTombstone { get; set; }
+
         /// <summary>Default constructor.</summary>
         public ReadOptions() { }
 

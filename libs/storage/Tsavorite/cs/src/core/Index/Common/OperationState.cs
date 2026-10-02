@@ -53,6 +53,7 @@ namespace Tsavorite.core
             internal const ushort kNoOpFlags = 0;
             internal const ushort kIsNoKey = 0x0001;
             internal const ushort kIsReadAtAddress = 0x0002;
+            internal const ushort kReportsTombstone = 0x0004;
 #pragma warning restore IDE1006 // Naming Styles
 
             internal ReadCopyOptions readCopyOptions;   // Two byte enums
@@ -91,6 +92,7 @@ namespace Tsavorite.core
                 // operationFlags defaults to 0 (== kNoOpFlags); skip the redundant write.
                 readCopyOptions = ReadCopyOptions.Merge(sessionReadCopyOptions, readOptions.CopyOptions);
                 initialIORecordSize = readOptions.InitialIORecordSize;
+                if (readOptions.ReportTombstone) operationFlags |= kReportsTombstone;
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -102,6 +104,10 @@ namespace Tsavorite.core
             }
 
             internal readonly bool IsNoKey => (operationFlags & kIsNoKey) != 0;
+
+            /// <summary>NOTFOUND on a tombstone, flagged <see cref="StatusCode.Tombstoned"/> when the read asked for it.</summary>
+            internal readonly OperationStatus TombstoneNotFound => (operationFlags & kReportsTombstone) != 0
+                ? OperationStatusUtils.AdvancedOpCode(OperationStatus.NOTFOUND, StatusCode.Tombstoned) : OperationStatus.NOTFOUND;
             internal void SetIsNoKey() => operationFlags |= kIsNoKey;
 
             internal readonly bool IsReadAtAddress => (operationFlags & kIsReadAtAddress) != 0;

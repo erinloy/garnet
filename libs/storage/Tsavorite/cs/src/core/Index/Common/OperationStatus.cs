@@ -95,7 +95,7 @@ namespace Tsavorite.core
         COPIED_RECORD = StatusCode.CopiedRecord << OperationStatusUtils.OpStatusToStatusCodeShift,
         COPIED_RECORD_TO_READ_CACHE = StatusCode.CopiedRecordToReadCache << OperationStatusUtils.OpStatusToStatusCodeShift,
         // unused (StatusCode)0x60,
-        // unused (StatusCode)0x70,
+        TOMBSTONED = StatusCode.Tombstoned << OperationStatusUtils.OpStatusToStatusCodeShift,
         EXPIRED = StatusCode.Expired << OperationStatusUtils.OpStatusToStatusCodeShift
     }
 

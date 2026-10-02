@@ -127,7 +127,10 @@ namespace Tsavorite.core
         /// </remarks>
         WrongType = 0x60,
 
-        // unused 0x70,
+        /// <summary>
+        /// A Read found the key's latest record and it is a tombstone (combined with NotFound): the key was deleted, not never written.
+        /// </summary>
+        Tombstoned = 0x70,
 
         /// <summary>
         /// Individual record-status values that are not masked together.

@@ -127,6 +127,11 @@ namespace Tsavorite.core
         public readonly bool IsExpired => (statusCode & StatusCode.Expired) == StatusCode.Expired;
 
         /// <summary>
+        /// Whether a NotFound read ended on the key's tombstone (deleted) rather than on no record at all (never written).
+        /// </summary>
+        public readonly bool IsTombstoned => (statusCode & StatusCode.RecordStatusMask) == StatusCode.Tombstoned;
+
+        /// <summary>
         /// Whether the operation found an expired record
         /// </summary>
         public readonly bool IsWrongType => (statusCode & StatusCode.WrongType) == StatusCode.WrongType;
