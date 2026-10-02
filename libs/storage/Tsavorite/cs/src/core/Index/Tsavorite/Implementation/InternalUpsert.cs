@@ -341,6 +341,13 @@ namespace Tsavorite.core
                 return OperationStatus.NOTFOUND;    // But not CreatedRecord
             }
 
+            // Do not elide (restore newRecordInfo.PreviousAddress to its original WriteNewRecordInfo state) if requested to preserve the source record.
+            if (upsertInfo.PreserveSourceRecord && allocOptions.elideSourceRecord)
+            {
+                allocOptions.elideSourceRecord = false;
+                newLogRecord.InfoRef.PreviousAddress = stackCtx.recSrc.LatestLogicalAddress;
+            }
+
             // Insert the new record by CAS'ing it into the hash entry (this also detaches/drops any read-cache prefix).
             // If the current record can be elided then we can freelist it; detach it by swapping its .PreviousAddress into newRecordInfo.
             success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx);

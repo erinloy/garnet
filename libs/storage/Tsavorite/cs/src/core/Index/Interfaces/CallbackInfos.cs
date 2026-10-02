@@ -55,6 +55,13 @@ namespace Tsavorite.core
         public UpsertAction Action { get; set; }
 
         /// <summary>
+        /// If set true by InitialWriter, the source record this upsert replaces will not be elided from the tag chain even if this is
+        /// otherwise possible, so IterateKeyVersions and ReadAtAddress still reach it (the Upsert
+        /// counterpart of <see cref="RMWInfo.PreserveCopyUpdaterSourceRecord"/>).
+        /// </summary>
+        public bool PreserveSourceRecord { get; set; }
+
+        /// <summary>
         /// User-defined byte of data associated with the operation
         /// </summary>
         public byte UserData { get; set; }

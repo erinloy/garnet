@@ -111,6 +111,7 @@ namespace Tsavorite.test.readaddress
                 output.address = upsertInfo.Address;
                 output.recordInfo = dstLogRecord.Info;
                 lastWriteAddress = upsertInfo.Address;
+                upsertInfo.PreserveSourceRecord = preserveCopyUpdaterSource;
                 return true;
             }
 
@@ -354,10 +355,7 @@ namespace Tsavorite.test.readaddress
         [Test, Category(TsavoriteKVTestCategory), Category(ReadTestCategory)]
         public void IterateKeyTests([Values(FlushMode.NoFlush, FlushMode.OnDisk)] FlushMode flushMode, [Values(UpdateOp.Upsert, UpdateOp.RMW)] UpdateOp updateOp)
         {
-            // Upsert does not provide the preserveCopyUpdaterSource option, so we cannot check it in NoFlush; the record will always be elided.
-            if (flushMode == FlushMode.NoFlush && updateOp == UpdateOp.Upsert)
-                Assert.Ignore("Cannot test NoFlush with Upsert");
-
+            // NoFlush keeps every version in memory, where only PreserveSourceRecord (Upsert) or PreserveCopyUpdaterSourceRecord (RMW) stops the first update's elision.
             using var testStore = new TestStore(useReadCache: false, ReadCopyOptions.None, flushMode != FlushMode.NoFlush);
             testStore.Populate(useRMW: updateOp == UpdateOp.RMW, preserveCopyUpdaterSource: true).GetAwaiter().GetResult();
 
@@ -373,10 +371,6 @@ namespace Tsavorite.test.readaddress
         [Test, Category(TsavoriteKVTestCategory), Category(ReadTestCategory)]
         public void IterateKeyStopTests([Values(FlushMode.NoFlush, FlushMode.OnDisk)] FlushMode flushMode, [Values(UpdateOp.Upsert, UpdateOp.RMW)] UpdateOp updateOp)
         {
-            // Upsert does not provide the preserveCopyUpdaterSource option, so we cannot check it in NoFlush; the record will always be elided.
-            if (flushMode == FlushMode.NoFlush && updateOp == UpdateOp.Upsert)
-                Assert.Ignore("Cannot test NoFlush with Upsert");
-
             using var testStore = new TestStore(useReadCache: false, ReadCopyOptions.None, flushMode != FlushMode.NoFlush);
             testStore.Populate(updateOp == UpdateOp.RMW, preserveCopyUpdaterSource: true).GetAwaiter().GetResult();
 
