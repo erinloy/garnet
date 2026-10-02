@@ -32,11 +32,15 @@ namespace Tsavorite.test
         private IDevice log;
 
         [SetUp]
-        public void Setup()
+        public void Setup() => Open(keepDeleteTombstones: false);
+
+        private void Open(bool keepDeleteTombstones)
         {
+            TearDown();
             DeleteDirectory(MethodTestDir, wait: true);
             log = Devices.CreateLogDevice(Path.Join(MethodTestDir, "tombstone.log"), deleteOnClose: true);
-            store = new(new KVSettings { IndexSize = 1L << 13, LogDevice = log, PageSize = MinKvLogPageSize, LogMemorySize = 1L << 15, SegmentSize = 1L << 22 }
+            store = new(new KVSettings { IndexSize = 1L << 13, LogDevice = log, PageSize = MinKvLogPageSize, LogMemorySize = 1L << 15, SegmentSize = 1L << 22,
+                                         KeepDeleteTombstones = keepDeleteTombstones }
                 , StoreFunctions.Create(KeyStruct.Comparer.Instance, SpanByteRecordTriggers.Instance)
                 , (allocatorSettings, storeFunctions) => new(allocatorSettings, storeFunctions));
             session = store.NewSession<KeyStruct, InputStruct, OutputStruct, Empty, QuietFunctions>(new QuietFunctions());
@@ -46,9 +50,9 @@ namespace Tsavorite.test
         [TearDown]
         public void TearDown()
         {
-            session?.Dispose();
-            store?.Dispose();
-            log?.Dispose();
+            session?.Dispose(); session = null;
+            store?.Dispose(); store = null;
+            log?.Dispose(); log = null;
             OnTearDown();
         }
 
@@ -91,6 +95,25 @@ namespace Tsavorite.test
 
             var plain = Read(deleted, reportTombstone: false);
             ClassicAssert.AreEqual(new Status(StatusCode.NotFound), plain, "a read that did not ask is the plain NotFound it always was");
+        }
+
+        [Test]
+        [Category("TsavoriteKV")]
+        public void A_store_that_keeps_tombstones_never_elides_a_delete([Values] bool keep)
+        {
+            Open(keepDeleteTombstones: keep);
+            var key = new KeyStruct { kfield1 = 7, kfield2 = 8 };
+            var value = new ValueStruct { vfield1 = 9, vfield2 = 10 };
+            // A fresh key in the MUTABLE region with no older version: the case a default store elides (record freed, no tombstone).
+            _ = bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default);
+            _ = bContext.Delete(key, Empty.Default);
+
+            var status = Read(key);
+            ClassicAssert.IsTrue(status.NotFound, status.ToString());
+            if (keep)
+                ClassicAssert.IsTrue(status.IsTombstoned, $"a store that keeps tombstones leaves one for a mutable delete ({status})");
+            else
+                ClassicAssert.IsFalse(status.IsTombstoned, $"CONTROL: the default store elides it, so no tombstone answers ({status})");
         }
     }
 }

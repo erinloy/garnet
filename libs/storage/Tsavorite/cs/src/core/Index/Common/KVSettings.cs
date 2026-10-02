@@ -134,6 +134,12 @@ namespace Tsavorite.core
         public RevivificationSettings RevivificationSettings;
 
         /// <summary>
+        /// A delete always leaves its tombstone on the log: the deleted record is never elided to the free pool. A store that keeps
+        /// older copies elsewhere (F2's cold tier) needs the tombstone, or the older copy would answer again.
+        /// </summary>
+        public bool KeepDeleteTombstones = false;
+
+        /// <summary>
         /// Epoch instance used by the store
         /// </summary>
         public LightEpoch Epoch = null;

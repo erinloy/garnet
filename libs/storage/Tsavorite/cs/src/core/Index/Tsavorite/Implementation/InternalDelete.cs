@@ -130,7 +130,7 @@ namespace Tsavorite.core
 
                         // Try to transfer the record from the tag chain to the free record pool iff previous address points to invalid address.
                         // Otherwise an earlier record for this key could be reachable again.
-                        if (CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info))
+                        if (!KeepDeleteTombstones && CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info))
                             HandleRecordElision<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, ref srcLogRecord);
 
                         status = OperationStatusUtils.AdvancedOpCode(OperationStatus.SUCCESS, StatusCode.InPlaceUpdatedRecord);
@@ -214,7 +214,7 @@ namespace Tsavorite.core
             AllocateOptions allocOptions = new()
             {
                 recycle = true,
-                elideSourceRecord = stackCtx.recSrc.HasMainLogSrc && CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info)
+                elideSourceRecord = !KeepDeleteTombstones && stackCtx.recSrc.HasMainLogSrc && CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info)
             };
 
             // We know the existing record cannot be elided; it must point to a valid record; otherwise InternalDelete would have returned NOTFOUND.
