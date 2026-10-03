@@ -115,5 +115,27 @@ namespace Tsavorite.test
             else
                 ClassicAssert.IsFalse(status.IsTombstoned, $"CONTROL: the default store elides it, so no tombstone answers ({status})");
         }
+
+        [Test]
+        [Category("TsavoriteKV")]
+        public void A_store_that_keeps_tombstones_carries_them_through_compaction([Values] bool keep)
+        {
+            Open(keepDeleteTombstones: keep);
+            var key = new KeyStruct { kfield1 = 11, kfield2 = 12 };
+            var value = new ValueStruct { vfield1 = 13, vfield2 = 14 };
+            _ = bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default);
+            store.Log.FlushAndEvict(wait: true);
+            _ = bContext.Delete(key, Empty.Default);
+            store.Log.FlushAndEvict(wait: true);
+            var compacted = session.Compact(store.Log.SafeReadOnlyAddress, CompactionType.Lookup);
+            ClassicAssert.Greater(compacted, 0L);
+
+            var status = Read(key);
+            ClassicAssert.IsTrue(status.NotFound, status.ToString());
+            if (keep)
+                ClassicAssert.IsTrue(status.IsTombstoned, $"the tombstone survives compaction in a store that keeps them ({status})");
+            else
+                ClassicAssert.IsFalse(status.IsTombstoned, $"CONTROL: a default store drops it at compaction ({status})");
+        }
     }
 }

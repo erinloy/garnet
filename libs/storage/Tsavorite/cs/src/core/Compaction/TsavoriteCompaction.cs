@@ -45,7 +45,8 @@ namespace Tsavorite.core
                 {
                     var key = iter1.Key;
 
-                    if (!iter1.Info.Tombstone && !cf.IsDeleted(in iter1))
+                    // A store that keeps tombstones (F2: older copies live in a cold tier) carries them forward too, or a copy would answer again.
+                    if ((KeepDeleteTombstones || !iter1.Info.Tombstone) && !cf.IsDeleted(in iter1))
                     {
                         var iter1AsLogSource = iter1 as ISourceLogRecord;   // Can't use 'ref' on a 'using' variable
                         var status = storebContext.CompactionCopyToTail(in iter1AsLogSource, iter1.CurrentAddress, iter1.NextAddress);
