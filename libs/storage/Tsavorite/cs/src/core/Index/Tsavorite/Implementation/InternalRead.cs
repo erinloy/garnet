@@ -159,6 +159,8 @@ namespace Tsavorite.core
 
                 // No record found
                 Debug.Assert(!sessionFunctions.IsTransactionalLocking || LockTable.IsLocked(ref stackCtx.hei), "A Transactional-session Read() of a non-existent key requires a LockTable lock");
+                if (stackCtx.recSrc.LogicalAddress != LogAddress.kInvalidAddress)
+                    ReadsBelowBegin.Record();   // the key had a record; its chain ends below BeginAddress
                 return OperationStatus.NOTFOUND;
             }
             finally

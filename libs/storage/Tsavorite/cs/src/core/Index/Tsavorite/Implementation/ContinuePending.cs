@@ -35,7 +35,11 @@ namespace Tsavorite.core
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
         {
             if (request.logicalAddress < hlogBase.BeginAddress || request.logicalAddress < pendingState.minAddress)
+            {
+                if (request.logicalAddress < hlogBase.BeginAddress && request.logicalAddress != LogAddress.kInvalidAddress)
+                    ReadsBelowBegin.Record();   // truncated while the read was pending
                 goto NotFound;
+            }
 
             if (operationState.IsReadAtAddress && !operationState.IsNoKey && !storeFunctions.KeysEqual(pendingState.DiskLogRecord, pendingState.requestKey))
                 goto NotFound;

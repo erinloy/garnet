@@ -137,5 +137,26 @@ namespace Tsavorite.test
             else
                 ClassicAssert.IsFalse(status.IsTombstoned, $"CONTROL: a default store drops it at compaction ({status})");
         }
+
+        [Test]
+        [Category("TsavoriteKV")]
+        public void A_read_whose_record_went_below_begin_is_counted_and_a_never_written_key_is_not()
+        {
+            var key = new KeyStruct { kfield1 = 21, kfield2 = 22 };
+            var value = new ValueStruct { vfield1 = 23, vfield2 = 24 };
+            _ = bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default);
+            store.Log.FlushAndEvict(wait: true);
+            store.Log.ShiftBeginAddress(store.Log.TailAddress, truncateLog: false);
+
+            var before = ReadsBelowBegin.Count;
+            var status = Read(key, reportTombstone: false);
+            ClassicAssert.IsTrue(status.NotFound, status.ToString());
+            ClassicAssert.AreEqual(before + 1, ReadsBelowBegin.Count, "the key had a record; its chain ends below BeginAddress");
+
+            before = ReadsBelowBegin.Count;
+            status = Read(new KeyStruct { kfield1 = 9001, kfield2 = 9002 }, reportTombstone: false);
+            ClassicAssert.IsTrue(status.NotFound, status.ToString());
+            ClassicAssert.AreEqual(before, ReadsBelowBegin.Count, "CONTROL: a never-written key is not a false absence");
+        }
     }
 }
