@@ -62,6 +62,18 @@ namespace Tsavorite.core
         public bool PreserveSourceRecord { get; set; }
 
         /// <summary>
+        /// Set before InitialWriter: true when the record this upsert replaces is in the main log in memory (mutable or read-only
+        /// region), so <see cref="SourceTombstone"/> is known. False for a new key and for a source only on disk.
+        /// </summary>
+        public bool SourceInMemory { get; internal set; }
+
+        /// <summary>
+        /// Set before InitialWriter: when <see cref="SourceInMemory"/>, whether the record this upsert replaces is a tombstone
+        /// (the upsert revives the key) rather than a live value (the upsert updates it).
+        /// </summary>
+        public bool SourceTombstone { get; internal set; }
+
+        /// <summary>
         /// User-defined byte of data associated with the operation
         /// </summary>
         public byte UserData { get; set; }

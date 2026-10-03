@@ -325,6 +325,8 @@ namespace Tsavorite.core
 
             upsertInfo.Address = newLogicalAddress;
             upsertInfo.KeyHash = stackCtx.hei.hash;
+            upsertInfo.SourceInMemory = stackCtx.recSrc.HasMainLogSrc;
+            upsertInfo.SourceTombstone = stackCtx.recSrc.HasMainLogSrc && srcLogRecord.Info.Tombstone;
 
             // Type arg specification is needed because we don't pass TContext
             var success = TValueSelector.InitialWriter<TSourceLogRecord, TInput, TOutput, TContext, TSessionFunctionsWrapper>(
