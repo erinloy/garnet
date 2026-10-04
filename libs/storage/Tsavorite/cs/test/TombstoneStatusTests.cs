@@ -158,5 +158,45 @@ namespace Tsavorite.test
             ClassicAssert.IsTrue(status.NotFound, status.ToString());
             ClassicAssert.AreEqual(before, ReadsBelowBegin.Count, "CONTROL: a never-written key is not a false absence");
         }
+
+        [Test]
+        [Category("TsavoriteKV")]
+        public void A_conditional_insert_copies_only_when_nothing_newer_is_here()
+        {
+            var stale = new KeyStruct { kfield1 = 31, kfield2 = 32 };
+            var kept = new KeyStruct { kfield1 = 41, kfield2 = 42 };
+            var v1 = new ValueStruct { vfield1 = 1, vfield2 = 1 };
+            var v2 = new ValueStruct { vfield1 = 2, vfield2 = 2 };
+            _ = bContext.Upsert(stale, SpanByte.FromPinnedVariable(ref v1), Empty.Default);
+            _ = bContext.Upsert(kept, SpanByte.FromPinnedVariable(ref v1), Empty.Default);
+            var end = store.Log.TailAddress;
+            store.Log.ShiftReadOnlyAddress(end, wait: true);   // v1 is immutable, so the newer write is a new record above it
+            _ = bContext.Upsert(stale, SpanByte.FromPinnedVariable(ref v2), Empty.Default);   // newer than the copy the caller holds
+
+            using var iter = store.Log.Scan(store.Log.BeginAddress, end);
+            while (iter.GetNext())
+            {
+                var tail = store.Log.TailAddress;
+                var source = iter as ISourceLogRecord;
+                var status = bContext.ConditionalInsert(in source, iter.CurrentAddress);
+                if (status.IsPending) _ = bContext.CompletePending(wait: true);
+                var isStale = System.Runtime.InteropServices.MemoryMarshal.Read<KeyStruct>(iter.Key).kfield1 == 31;
+                if (isStale)
+                {
+                    ClassicAssert.IsTrue(status.Found && !status.Record.Copied, $"a newer record is here, so nothing is copied: {status}");
+                    ClassicAssert.AreEqual(tail, store.Log.TailAddress, $"nothing appended (record at {iter.CurrentAddress}, next {iter.NextAddress}, end {end})");
+                }
+                else
+                {
+                    ClassicAssert.Greater(store.Log.TailAddress, tail, $"CONTROL: nothing newer, so the record is copied to the tail: {status}");
+                    ClassicAssert.IsTrue(status.Record.Copied, $"the copy says so: {status}");
+                }
+            }
+
+            InputStruct input = default;
+            OutputStruct output = default;
+            ClassicAssert.IsTrue(bContext.Read(stale, ref input, ref output).Found);
+            ClassicAssert.AreEqual(2, output.value.vfield1, "the newer value still answers");
+        }
     }
 }

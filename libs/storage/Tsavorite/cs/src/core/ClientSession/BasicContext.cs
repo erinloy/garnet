@@ -505,6 +505,16 @@ namespace Tsavorite.core
         }
 
         /// <summary>
+        /// F2's cold-to-hot copy: append <paramref name="srcLogRecord"/> at the tail only if this log holds no record for its key above
+        /// <paramref name="expectedAddress"/> - the address the key's chain started at when the caller decided to read elsewhere
+        /// (<see cref="LogAddress.kInvalidAddress"/> when it had none). Status.Record.Copied says it was appended; Found without Copied means a newer record is already here and nothing was.
+        /// May go pending when the chain reaches below HeadAddress; complete it like any other operation.
+        /// </summary>
+        public Status ConditionalInsert<TSourceLogRecord>(in TSourceLogRecord srcLogRecord, long expectedAddress)
+            where TSourceLogRecord : ISourceLogRecord
+            => CompactionCopyToTail(in srcLogRecord, expectedAddress, expectedAddress + 1);
+
+        /// <summary>
         /// Push a scan record to client if key is known to not exist in between expectedLogicalAddress and tail.
         /// </summary>
         /// <param name="scanCursorState">Scan cursor tracking state, from the session on which this scan was initiated</param>
