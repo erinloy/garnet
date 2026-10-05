@@ -208,5 +208,50 @@ namespace Tsavorite.test
             }
             finally { Release(store, device, completed); }
         }
+
+        /// <summary>
+        /// A CHECKPOINT AFTER A FAILED ONE NEVER NAMES UNFLUSHED BYTES DURABLE. The failed fold-over already moved ReadOnlyAddress to
+        /// the tail, so the next one's shift moved nothing, and before this it waited for no flush: with no write between, it reported
+        /// success at once while its pages were still being retried (RG 2026-10-05: a durability barrier acked 246,720 unflushed bytes).
+        /// Every checkpoint that succeeds here must find FlushedUntilAddress at the tail it was taken at; one that runs while the fault
+        /// stands may fail instead.
+        /// </summary>
+        [Test]
+        [Category("TsavoriteKV")]
+        public void A_checkpoint_after_a_failed_one_never_names_unflushed_bytes_durable()
+        {
+            var (store, device) = Build();
+            var completed = false;
+            try
+            {
+                Write(store, 0);
+                device.FailWrites = -1;
+                Write(store, Records, count: 8);   // inside the in-memory region: the checkpoint's own flush is the one refused
+                (completed, _, var thrown) = Checkpoint(store);
+                ClassicAssert.IsTrue(completed, "the CONTROL: the failed checkpoint finishes within the deadline");
+                ClassicAssert.IsInstanceOf<TsavoriteFlushFaultException>(thrown, $"the CONTROL: it fails with the flush fault, got {thrown?.GetType().Name ?? "no exception"}");
+
+                // The device recovers, and the next checkpoints are taken with no write between: each that succeeds must have waited.
+                device.FailWrites = 0;
+                var tail = store.hlogBase.GetTailAddress();
+                var succeeded = false;
+                var deadline = DateTime.UtcNow + Deadline;
+                while (!succeeded && DateTime.UtcNow < deadline)
+                {
+                    (completed, succeeded, var again) = Checkpoint(store);
+                    ClassicAssert.IsTrue(completed, "a checkpoint after the failed one did not finish within the deadline");
+                    if (again is not null)
+                    {
+                        ClassicAssert.IsInstanceOf<TsavoriteFlushFaultException>(again, $"only the standing fault may fail it, got {again}");
+                        Thread.Sleep(50);   // the retry lands on the engine's own backoff; nothing signals it
+                    }
+                    if (succeeded)
+                        ClassicAssert.GreaterOrEqual(store.hlogBase.FlushedUntilAddress, tail,
+                            "the checkpoint succeeded with its tail not flushed: it named bytes durable that are not on the device");
+                }
+                ClassicAssert.IsTrue(succeeded, "no checkpoint succeeded once the device served writes again");
+            }
+            finally { Release(store, device, completed); }
+        }
     }
 }

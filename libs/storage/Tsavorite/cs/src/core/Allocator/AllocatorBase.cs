@@ -1573,6 +1573,26 @@ namespace Tsavorite.core
                 epoch.BumpCurrentEpoch(() => OnPagesMarkedReadOnly(localTailAddress));
                 return true;
             }
+            // READ-ONLY IS ALREADY AT THE TAIL, BUT ITS FLUSH HAS NOT LANDED (an earlier fold-over moved it and that flush failed or is
+            // still running): the caller still waits for the tail. Without this a fold-over checkpoint here waited for nothing and named
+            // the tail durable over bytes not on the device (RG, 2026-10-05: a barrier after a failed one acked 246,720 unflushed bytes).
+            if (FlushedUntilAddress < localTailAddress)
+            {
+                var pending = notifyFlushedUntilAddressTcs;
+                if (pending is { Task.IsCompleted: false } && notifyFlushedUntilAddress >= localTailAddress)
+                {
+                    notifyDone = pending.Task;
+                    return false;
+                }
+                var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                notifyFlushedUntilAddressTcs = tcs;
+                notifyFlushedUntilAddress = localTailAddress;
+                notifyDone = tcs.Task;
+                if (flushFault is { } standing)
+                    _ = tcs.TrySetException(standing);
+                else if (FlushedUntilAddress >= localTailAddress)
+                    _ = tcs.TrySetResult(true);   // landed between the check and the publish, so the flush path did not see this waiter
+            }
             return false;
         }
 
