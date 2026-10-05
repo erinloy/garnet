@@ -22,6 +22,22 @@ namespace Tsavorite.devices
                 return true;
             }
 
+            // ZILTCH 2026-10-05: A BLOB THAT COULD NOT BE REACHED OR AUTHENTICATED RIGHT NOW IS NOT A FAILED STORAGE OPERATION.
+            // Measured on the webfrontend (cell-20261004.log 11:17:48Z and 22:08Z, cell-20261005.log): the Azure CLI credential
+            // timed out ("Azure CLI authentication timed out", a box starved of commit) inside a CRITICAL page write. That is not a
+            // RequestFailedException, so it was not transient; PerformWithRetriesAsync took it for fatal, HandleStorageError
+            // terminated the partition, and every later operation on that log device was cancelled with no exception text
+            // (callback uint.MaxValue, "error code -1") for the rest of the process life: FlushedUntilAddress never advanced,
+            // the checkpoint coordinator failed 39 times in a row, and the store could not persist (the log buffer fills, then
+            // writers wedge). The tier's own credential and lease code already say a slow CLI is not a failed login
+            // (ColdTierCredential, RgColdTier.IsLeaseUnverifiable); the device now agrees, for the same family: a credential that
+            // would not mint, and a request that never got an answer (RequestFailedException with Status 0, HttpRequestException,
+            // SocketException: DNS, reset, refused). A genuine refusal (403, 404, a failed precondition) is still not transient.
+            if (IsEnvironmentUnavailable(exception))
+            {
+                return true;
+            }
+
             // Empirically observed: timeouts on synchronous calls
             if (exception.InnerException is TimeoutException)
             {
@@ -44,6 +60,45 @@ namespace Tsavorite.devices
             if (exception is System.IO.IOException && exception.InnerException is System.Net.Sockets.SocketException)
             {
                 return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// ZILTCH: the environment could not answer right now: a credential that would not mint a token, or a request that got no
+        /// HTTP answer at all. Walks the inner chain (the Azure pipeline wraps transport failures). By type name for the credential
+        /// family because this assembly does not reference Azure.Identity.
+        /// </summary>
+        public static bool IsEnvironmentUnavailable(Exception exception)
+        {
+            for (var e = exception; e != null; e = e.InnerException)
+            {
+                if (e is Azure.RequestFailedException { Status: 0 }
+                    || e is System.Net.Http.HttpRequestException
+                    || e is System.Net.Sockets.SocketException)
+                {
+                    return true;
+                }
+
+                for (var t = e.GetType(); t != null; t = t.BaseType)
+                {
+                    if (t.FullName is "Azure.Identity.AuthenticationFailedException" or "Azure.Identity.CredentialUnavailableException")
+                    {
+                        return true;
+                    }
+                }
+
+                if (e is AggregateException aggregate)
+                {
+                    foreach (var inner in aggregate.InnerExceptions)
+                    {
+                        if (IsEnvironmentUnavailable(inner))
+                        {
+                            return true;
+                        }
+                    }
+                }
             }
 
             return false;
