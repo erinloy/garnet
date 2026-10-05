@@ -2531,6 +2531,11 @@ namespace Tsavorite.core
         /// issued and the op is therefore still pending. Shared by the synchronous iterator/scan path (called on
         /// the device completion thread) and the asynchronous run-thread drain (<see cref="TsavoriteKV{TStoreFunctions,TAllocator}.InternalCompletePendingRequest{TInput,TOutput,TContext,TSessionFunctionsWrapper}"/>).
         /// </summary>
+        /// <summary>Every record starts on a <see cref="Constants.kRecordAlignment"/>-byte boundary, so a link in range that does not
+        /// points into the middle of another record (webfrontend 2026-10-05: log:3194, inside a key's text, read as a 6.78 MB header).</summary>
+        private bool IsOffRecordAlignment(long logicalAddress)
+            => logicalAddress >= BeginAddress && (AbsoluteAddress(logicalAddress) & (Constants.kRecordAlignment - 1)) != 0;
+
         internal bool TryVerifyOrReissuePendingRead(ref AsyncIOContext ctx)
         {
             // A DEVICE ERROR FAILS THE READ, THE FIRST TIME. This used to be logged and then handed to the verify below as
@@ -2553,6 +2558,12 @@ namespace Tsavorite.core
             if (IsReadCache(ctx.logicalAddress) || AbsoluteAddress(ctx.logicalAddress) >= GetTailAddress())
             {
                 logger?.LogWarning("Pending read of {address} is past the log (tail {tail}) or in the read cache: a broken chain link, read as not found", AddressString(ctx.logicalAddress), AddressString(GetTailAddress()));
+                ctx.logicalAddress = kInvalidAddress;
+                return true;
+            }
+            if (IsOffRecordAlignment(ctx.logicalAddress))
+            {
+                logger?.LogWarning("Pending read of {address} is off the {alignment}-byte record alignment: a corrupt chain link into another record, read as not found", AddressString(ctx.logicalAddress), Constants.kRecordAlignment);
                 ctx.logicalAddress = kInvalidAddress;
                 return true;
             }
@@ -2586,9 +2597,15 @@ namespace Tsavorite.core
                 // Either we had an incomplete record (re-read the current record) or the key didn't match (read the
                 // previous record in the chain). If that address is in range, issue the read; else fall through to
                 // "IO complete" and let ContinuePending* detect the below-range case.
+                var fromAddress = ctx.logicalAddress;
                 ctx.logicalAddress = prevAddressToRead;
                 if (IsReadCache(ctx.logicalAddress) || AbsoluteAddress(ctx.logicalAddress) >= GetTailAddress())
                     ctx.logicalAddress = kInvalidAddress;   // a broken link, as above: resolve below range instead of issuing it
+                else if (IsOffRecordAlignment(ctx.logicalAddress))
+                {
+                    logger?.LogWarning("The record at {from} links to {address}, off the {alignment}-byte record alignment: a corrupt chain link, read as not found", AddressString(fromAddress), AddressString(ctx.logicalAddress), Constants.kRecordAlignment);
+                    ctx.logicalAddress = kInvalidAddress;
+                }
                 else if (ctx.logicalAddress >= BeginAddress && ctx.logicalAddress >= ctx.minAddress)
                 {
                     _wrapper.OnDisposeDiskRecord(ref ctx.diskLogRecord, DisposeReason.DeserializedFromDisk);
