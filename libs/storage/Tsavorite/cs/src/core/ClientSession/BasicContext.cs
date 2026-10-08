@@ -488,7 +488,7 @@ namespace Tsavorite.core
         /// <param name="currentAddress">LogicalAddress of the record to be copied</param>
         /// <param name="untilAddress">Lower-bound address (addresses are searched from tail (high) to head (low); do not search for "future records" earlier than this)</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal Status CompactionCopyToTail<TSourceLogRecord>(in TSourceLogRecord srcLogRecord, long currentAddress, long untilAddress)
+        internal Status CompactionCopyToTail<TSourceLogRecord>(in TSourceLogRecord srcLogRecord, long currentAddress, long untilAddress, bool createTag = false)
             where TSourceLogRecord : ISourceLogRecord
         {
             UnsafeResumeThread();
@@ -496,7 +496,7 @@ namespace Tsavorite.core
             {
                 return store.CompactionConditionalCopyToTail<TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions,
                         BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>, TSourceLogRecord>(
-                    sessionFunctions, in srcLogRecord, currentAddress, untilAddress);
+                    sessionFunctions, in srcLogRecord, currentAddress, untilAddress, createTag: createTag);
             }
             finally
             {
@@ -512,7 +512,7 @@ namespace Tsavorite.core
         /// </summary>
         public Status ConditionalInsert<TSourceLogRecord>(in TSourceLogRecord srcLogRecord, long expectedAddress)
             where TSourceLogRecord : ISourceLogRecord
-            => CompactionCopyToTail(in srcLogRecord, expectedAddress, expectedAddress + 1);
+            => CompactionCopyToTail(in srcLogRecord, expectedAddress, expectedAddress + 1, createTag: true);
 
         /// <summary>
         /// Push a scan record to client if key is known to not exist in between expectedLogicalAddress and tail.

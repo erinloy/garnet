@@ -87,11 +87,11 @@ namespace Tsavorite.core
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal Status CompactionConditionalCopyToTail<TInput, TOutput, TContext, TSessionFunctionsWrapper, TSourceLogRecord>(
-                TSessionFunctionsWrapper sessionFunctions, in TSourceLogRecord srcLogRecord, long currentAddress, long minAddress, long maxAddress = long.MaxValue)
+                TSessionFunctionsWrapper sessionFunctions, in TSourceLogRecord srcLogRecord, long currentAddress, long minAddress, long maxAddress = long.MaxValue, bool createTag = false)
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
             where TSourceLogRecord : ISourceLogRecord
         {
-            Debug.Assert(epoch.ThisInstanceProtected(), "This is called only from Compaction so the epoch should be protected");
+            Debug.Assert(epoch.ThisInstanceProtected(), "This is called only from Compaction or ConditionalInsert so the epoch should be protected");
             OperationState<TInput, TOutput, TContext> operationState = default;
             // Plumb the source logical address so PostCopyToTail can name per-flush snapshot files
             // (used by RangeIndex's BfTree compaction path).
@@ -101,12 +101,24 @@ namespace Tsavorite.core
             OperationStackContext<TStoreFunctions, TAllocator> stackCtx = new(keyHash);
             OperationStatus status;
             bool needIO;
-            do
+            while (true)
             {
-                if (TryFindRecordInMainLogForConditionalOperation<TSourceLogRecord, TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, srcLogRecord, ref stackCtx, currentAddress, minAddress, maxAddress, out status, out needIO))
-                    return Status.CreateFound();
+                do
+                {
+                    if (TryFindRecordInMainLogForConditionalOperation<TSourceLogRecord, TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, srcLogRecord, ref stackCtx, currentAddress, minAddress, maxAddress, out status, out needIO))
+                        return Status.CreateFound();
+                }
+                while (sessionFunctions.Store.HandleImmediateNonPendingRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(status, sessionFunctions));
+
+                // NOTFOUND has one writer: the key's tag has no index entry, and the search left no bucket to link a record into.
+                // Compaction never meets it (its source is in this log). F2's copy from a cold store does: create the tag, as an Upsert
+                // of a new key does, and search again on the live entry, because another session may have appended under it meanwhile.
+                if (status != OperationStatus.NOTFOUND || !createTag)
+                    break;
+                if (sessionFunctions.Ctx.phase == Phase.IN_PROGRESS_GROW)
+                    SplitBuckets(stackCtx.hei.hash);
+                FindOrCreateTag(ref stackCtx.hei, hlogBase.BeginAddress);
             }
-            while (sessionFunctions.Store.HandleImmediateNonPendingRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(status, sessionFunctions));
 
             if (needIO)
                 status = PrepareIOForConditionalOperation(sessionFunctions, ref operationState, keyHash, in srcLogRecord, ref stackCtx, minAddress, maxAddress);
