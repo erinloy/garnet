@@ -57,7 +57,12 @@ namespace Tsavorite.core
             if (sessionFunctions.Ctx.phase == Phase.IN_PROGRESS_GROW)
                 SplitBuckets(stackCtx.hei.hash);
 
-            if (!FindTagAndTryEphemeralXLock<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, out OperationStatus status))
+            // A store that keeps tombstones (F2: the key's only copy may be in a cold tier) writes one for a key whose tag this index
+            // never held; the default store has nothing to delete there and answers NOTFOUND.
+            OperationStatus status;
+            if (!(KeepDeleteTombstones
+                    ? FindOrCreateTagAndTryEphemeralXLock<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, out status)
+                    : FindTagAndTryEphemeralXLock<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, out status)))
                 return status;
 
             LogRecord srcLogRecord = default;
