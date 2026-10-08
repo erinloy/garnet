@@ -515,6 +515,35 @@ namespace Tsavorite.core
             => CompactionCopyToTail(in srcLogRecord, expectedAddress, expectedAddress + 1, createTag: true);
 
         /// <summary>
+        /// F2's copy from a cold store, from bytes: append (<paramref name="key"/>, <paramref name="value"/>) at the tail only if this log holds no record
+        /// for the key, live or tombstone, at or above <paramref name="sinceAddress"/> - the TailAddress the caller read before it looked elsewhere
+        /// (<see cref="LogAddress.kInvalidAddress"/>: no record for the key anywhere in this log). Status.Record.Copied says it was appended; Found without
+        /// Copied means a record is there and nothing was written. No session function runs. May go pending when the key's chain reaches below
+        /// HeadAddress; complete it with CompletePendingWithOutputs.
+        /// </summary>
+        public Status ConditionalInsert(TKey key, ReadOnlySpan<byte> value, long sinceAddress)
+            => ConditionalInsertBytes(key, value, tombstone: false, sinceAddress);
+
+        /// <summary>The same test as <see cref="ConditionalInsert(TKey, ReadOnlySpan{byte}, long)"/>, appending a tombstone for the key.</summary>
+        public Status ConditionalInsertTombstone(TKey key, long sinceAddress)
+            => ConditionalInsertBytes(key, default, tombstone: true, sinceAddress);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private Status ConditionalInsertBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress)
+        {
+            UnsafeResumeThread();
+            try
+            {
+                return store.ConditionalInsertBytes<TKey, TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions,
+                        BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(sessionFunctions, key, value, tombstone, sinceAddress);
+            }
+            finally
+            {
+                UnsafeSuspendThread();
+            }
+        }
+
+        /// <summary>
         /// Push a scan record to client if key is known to not exist in between expectedLogicalAddress and tail.
         /// </summary>
         /// <param name="scanCursorState">Scan cursor tracking state, from the session on which this scan was initiated</param>
