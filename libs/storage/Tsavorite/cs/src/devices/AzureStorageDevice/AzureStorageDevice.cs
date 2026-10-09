@@ -494,6 +494,12 @@ namespace Tsavorite.devices
             ReadFromBlobAsync(blobEntry, sourceAddress, destinationAddress, readLength, id);
         }
 
+        // A cancelled operation carries no exception of its own: what it has to say is what terminated the device.
+        Exception WhyFailed(Task t)
+            => t.Exception ?? (Exception)new OperationCanceledException(StorageErrorHandler is { IsTerminated: true } handler
+                ? $"the device was terminated ({handler.TerminatedBecause ?? "its cause was not recorded"})"
+                : "the operation was cancelled; the device is not terminated");
+
         unsafe void ReadFromBlobAsync(BlobEntry blobEntry, long sourceAddress, long destinationAddress, uint readLength, long id)
         {
             ReadFromBlobUnsafeAsync(blobEntry, sourceAddress, destinationAddress, readLength, id)
@@ -506,7 +512,7 @@ namespace Tsavorite.devices
                         {
                             BlobManager?.StorageTracer?.TsavoriteStorageProgress($"StorageOpReturned AzureStorageDevice.ReadAsync id={id} (Failure)");
                             // A FAILED READ NAMES ITS EXCEPTION, for the same reason the write above does.
-                            BlobManager?.HandleStorageError(nameof(ReadFromBlobAsync), $"read FAILED at source={sourceAddress} bytes={readLength} id={id}", blobEntry.PageBlob.Default?.Name, t.Exception, isFatal: false, isWarning: false);
+                            BlobManager?.HandleStorageError(nameof(ReadFromBlobAsync), $"read FAILED at source={sourceAddress} bytes={readLength} id={id}", blobEntry.PageBlob.Default?.Name, WhyFailed(t), isFatal: false, isWarning: false);
                             request.Callback(uint.MaxValue, request.NumBytes, request.Context);
                         }
                         else
@@ -700,7 +706,7 @@ namespace Tsavorite.devices
                             // the webfrontend: six consecutive index checkpoints failed that way with the cause discarded
                             // here, so the store could not persist and nothing said why. The task's exception is the only
                             // record of the cause and it lived exactly this long.
-                            BlobManager?.HandleStorageError(nameof(WriteToBlobAsync), $"write FAILED at destination={destinationAddress} bytes={numBytesToWrite} id={id}", blobEntry.PageBlob.Default?.Name, t.Exception, isFatal: false, isWarning: false);
+                            BlobManager?.HandleStorageError(nameof(WriteToBlobAsync), $"write FAILED at destination={destinationAddress} bytes={numBytesToWrite} id={id}", blobEntry.PageBlob.Default?.Name, WhyFailed(t), isFatal: false, isWarning: false);
                             request.Callback(uint.MaxValue, request.NumBytes, request.Context);
                         }
                         else

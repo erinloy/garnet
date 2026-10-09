@@ -40,6 +40,10 @@ namespace Tsavorite.devices
 
         public bool NormalTermination => terminationStatus == TerminatedNormally;
 
+        public string TerminatedBecause => Volatile.Read(ref terminatedBecause);
+
+        string terminatedBecause;
+
         volatile int terminationStatus = NotTerminated;
         const int NotTerminated = 0;
         const int TerminatedWithError = 1;
@@ -63,6 +67,7 @@ namespace Tsavorite.devices
 
             if (terminatePartition && terminationStatus == NotTerminated)
             {
+                _ = Interlocked.CompareExchange(ref terminatedBecause, Describe(context, message, exception), null);
                 if (Interlocked.CompareExchange(ref terminationStatus, TerminatedWithError, NotTerminated) == NotTerminated)
                 {
                     Terminate();
@@ -70,8 +75,20 @@ namespace Tsavorite.devices
             }
         }
 
+        // One line: when, where, and the failure by type, with the service's status and code when it answered.
+        static string Describe(string context, string message, Exception exception)
+        {
+            var what = exception == null ? "no exception" : exception.GetType().FullName;
+            if (exception is Azure.RequestFailedException refused)
+                what += $" status {refused.Status} {refused.ErrorCode}";
+            var said = exception?.Message?.Split('\n')[0].Trim();
+            return $"{DateTime.UtcNow:u} in {context}: {message}: {what}: {said}";
+        }
+
         public void TerminateNormally()
         {
+            if (terminationStatus == NotTerminated)
+                _ = Interlocked.CompareExchange(ref terminatedBecause, $"{DateTime.UtcNow:u} by a normal shutdown", null);
             if (Interlocked.CompareExchange(ref terminationStatus, TerminatedNormally, NotTerminated) == NotTerminated)
             {
                 Terminate();

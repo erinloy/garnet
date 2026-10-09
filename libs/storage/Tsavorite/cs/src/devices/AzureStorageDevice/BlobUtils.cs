@@ -68,13 +68,15 @@ namespace Tsavorite.devices
         /// <summary>
         /// ZILTCH: the environment could not answer right now: a credential that would not mint a token, or a request that got no
         /// HTTP answer at all. Walks the inner chain (the Azure pipeline wraps transport failures). By type name for the credential
-        /// family because this assembly does not reference Azure.Identity.
+        /// family because this assembly does not reference Azure.Identity. A 401 is in the family: the service did not take the
+        /// caller's token (one that expired while the machine slept), and the next attempt authenticates again. A 403 is not:
+        /// the caller is known and refused.
         /// </summary>
         public static bool IsEnvironmentUnavailable(Exception exception)
         {
             for (var e = exception; e != null; e = e.InnerException)
             {
-                if (e is Azure.RequestFailedException { Status: 0 }
+                if (e is Azure.RequestFailedException { Status: 0 or 401 }
                     || e is System.Net.Http.HttpRequestException
                     || e is System.Net.Sockets.SocketException)
                 {

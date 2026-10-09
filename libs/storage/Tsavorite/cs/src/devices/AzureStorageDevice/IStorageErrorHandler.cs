@@ -33,6 +33,11 @@ namespace Tsavorite.devices
         bool NormalTermination { get; }
 
         /// <summary>
+        /// When and by what this partition was terminated, or null while it is not.
+        /// </summary>
+        string TerminatedBecause { get; }
+
+        /// <summary>
         /// Wait for all termination operations to finish
         /// </summary>
         Task<bool> WaitForTermination(TimeSpan timeout);
