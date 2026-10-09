@@ -301,6 +301,10 @@ namespace Tsavorite.core
         /// operation such as growing the index). Use CompleteCheckpointAsync to wait completion.
         /// </returns>
         public bool TryInitiateFullCheckpoint(out Guid token, CheckpointType checkpointType, IStreamingSnapshotIteratorFunctions streamingSnapshotIteratorFunctions = null, CancellationToken cancellationToken = default)
+            => TryInitiateFullCheckpoint(out token, out _, checkpointType, streamingSnapshotIteratorFunctions, cancellationToken);
+
+        /// <summary>As the public form; also hands back the completion of the run it started (null when it started none).</summary>
+        internal bool TryInitiateFullCheckpoint(out Guid token, out TaskCompletionSource<bool> completion, CheckpointType checkpointType, IStreamingSnapshotIteratorFunctions streamingSnapshotIteratorFunctions, CancellationToken cancellationToken)
         {
             IStateMachine stateMachine;
 
@@ -315,7 +319,7 @@ namespace Tsavorite.core
             {
                 stateMachine = Checkpoint.Full(this, checkpointType, out token);
             }
-            return stateMachineDriver.Register(stateMachine, cancellationToken);
+            return stateMachineDriver.Register(stateMachine, out completion, cancellationToken);
         }
 
         /// <summary>
@@ -335,10 +339,10 @@ namespace Tsavorite.core
         public async ValueTask<(bool success, Guid token)> TakeFullCheckpointAsync(CheckpointType checkpointType,
             CancellationToken cancellationToken = default, IStreamingSnapshotIteratorFunctions streamingSnapshotIteratorFunctions = null)
         {
-            var success = TryInitiateFullCheckpoint(out Guid token, checkpointType, streamingSnapshotIteratorFunctions, cancellationToken);
+            var success = TryInitiateFullCheckpoint(out Guid token, out var completion, checkpointType, streamingSnapshotIteratorFunctions, cancellationToken);
 
             if (success)
-                await CompleteCheckpointAsync(cancellationToken).ConfigureAwait(false);
+                await CompleteStartedCheckpointAsync(completion, cancellationToken).ConfigureAwait(false);
 
             return (success, token);
         }
@@ -350,9 +354,13 @@ namespace Tsavorite.core
         /// <param name="cancellationToken">Caller's cancellation token</param>
         /// <returns>Whether we could initiate the checkpoint. Use CompleteCheckpointAsync to wait completion.</returns>
         public bool TryInitiateIndexCheckpoint(out Guid token, CancellationToken cancellationToken = default)
+            => TryInitiateIndexCheckpoint(out token, out _, cancellationToken);
+
+        /// <summary>As the public form; also hands back the completion of the run it started (null when it started none).</summary>
+        internal bool TryInitiateIndexCheckpoint(out Guid token, out TaskCompletionSource<bool> completion, CancellationToken cancellationToken)
         {
             var stateMachine = Checkpoint.IndexOnly(this, out token);
-            return stateMachineDriver.Register(stateMachine, cancellationToken);
+            return stateMachineDriver.Register(stateMachine, out completion, cancellationToken);
         }
 
         /// <summary>
@@ -369,10 +377,10 @@ namespace Tsavorite.core
         /// </returns>
         public async ValueTask<(bool success, Guid token)> TakeIndexCheckpointAsync(CancellationToken cancellationToken = default)
         {
-            var success = TryInitiateIndexCheckpoint(out Guid token, cancellationToken);
+            var success = TryInitiateIndexCheckpoint(out Guid token, out var completion, cancellationToken);
 
             if (success)
-                await CompleteCheckpointAsync(cancellationToken).ConfigureAwait(false);
+                await CompleteStartedCheckpointAsync(completion, cancellationToken).ConfigureAwait(false);
 
             return (success, token);
         }
@@ -387,6 +395,11 @@ namespace Tsavorite.core
         /// <returns>Whether we could initiate the checkpoint. Use CompleteCheckpointAsync to wait completion.</returns>
         public bool TryInitiateHybridLogCheckpoint(out Guid token, CheckpointType checkpointType,
             IStreamingSnapshotIteratorFunctions streamingSnapshotIteratorFunctions = null, CancellationToken cancellationToken = default)
+            => TryInitiateHybridLogCheckpoint(out token, out _, checkpointType, streamingSnapshotIteratorFunctions, cancellationToken);
+
+        /// <summary>As the public form; also hands back the completion of the run it started (null when it started none).</summary>
+        internal bool TryInitiateHybridLogCheckpoint(out Guid token, out TaskCompletionSource<bool> completion, CheckpointType checkpointType,
+            IStreamingSnapshotIteratorFunctions streamingSnapshotIteratorFunctions, CancellationToken cancellationToken)
         {
             IStateMachine stateMachine;
 
@@ -401,7 +414,7 @@ namespace Tsavorite.core
             {
                 stateMachine = Checkpoint.HybridLogOnly(this, checkpointType, out token);
             }
-            return stateMachineDriver.Register(stateMachine, cancellationToken);
+            return stateMachineDriver.Register(stateMachine, out completion, cancellationToken);
         }
 
         /// <summary>
@@ -420,10 +433,10 @@ namespace Tsavorite.core
         public async ValueTask<(bool success, Guid token)> TakeHybridLogCheckpointAsync(CheckpointType checkpointType,
             CancellationToken cancellationToken = default)
         {
-            var success = TryInitiateHybridLogCheckpoint(out Guid token, checkpointType, cancellationToken: cancellationToken);
+            var success = TryInitiateHybridLogCheckpoint(out Guid token, out var completion, checkpointType, null, cancellationToken);
 
             if (success)
-                await CompleteCheckpointAsync(cancellationToken).ConfigureAwait(false);
+                await CompleteStartedCheckpointAsync(completion, cancellationToken).ConfigureAwait(false);
 
             return (success, token);
         }
@@ -488,6 +501,29 @@ namespace Tsavorite.core
         /// Wait for ongoing checkpoint to complete
         /// </summary>
         /// <returns></returns>
+        /// <summary>
+        /// Waits for the checkpoint <paramref name="completion"/> was handed out for. <see cref="CompleteCheckpointAsync"/> asks the
+        /// driver what is running NOW, and a run that failed before that question is one it no longer knows of: a Take form would
+        /// return that run's token as a checkpoint taken. This form is told of the failure whenever it asks.
+        /// </summary>
+        internal async ValueTask CompleteStartedCheckpointAsync(TaskCompletionSource<bool> completion, CancellationToken token = default)
+        {
+            if (epoch.ThisInstanceProtected())
+                throw new TsavoriteException("Cannot use CompleteCheckpointAsync when using non-async sessions");
+
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                _ = await StateMachineDriver.CompleteRunAsync(completion, token).ConfigureAwait(false);
+            }
+            catch
+            {
+                _indexCheckpoint.Reset();
+                _hybridLogCheckpoint.Dispose();
+                throw;
+            }
+        }
+
         public async ValueTask CompleteCheckpointAsync(CancellationToken token = default)
         {
             if (epoch.ThisInstanceProtected())

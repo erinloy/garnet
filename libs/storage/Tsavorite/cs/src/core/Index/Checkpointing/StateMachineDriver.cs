@@ -162,12 +162,21 @@ namespace Tsavorite.core
         }
 
         public bool Register(IStateMachine stateMachine, CancellationToken token = default)
+            => Register(stateMachine, out _, token);
+
+        /// <summary>
+        /// Registers and starts <paramref name="stateMachine"/> and hands back the completion of THAT run. A run clears
+        /// <see cref="stateMachineCompleted"/> when it ends, so the driver, asked after a run that failed fast, answers that
+        /// nothing is running. The caller that started the run keeps this and is told how it ended whenever it asks.
+        /// </summary>
+        internal bool Register(IStateMachine stateMachine, out TaskCompletionSource<bool> completion, CancellationToken token = default)
         {
+            completion = null;
             if (Interlocked.CompareExchange(ref this.stateMachine, stateMachine, null) != null)
             {
                 return false;
             }
-            stateMachineCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            stateMachineCompleted = completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _ = Task.Run(async () => await RunStateMachine(token).ConfigureAwait(false));
             return true;
         }
@@ -204,6 +213,13 @@ namespace Tsavorite.core
                 return await _stateMachineCompleted.Task.WithCancellationAsync(token).ConfigureAwait(false);
             }
             return false;
+        }
+
+        /// <summary>Waits for the run <paramref name="completion"/> was handed out for, whether or not it has ended.</summary>
+        internal static async Task<bool> CompleteRunAsync(TaskCompletionSource<bool> completion, CancellationToken token = default)
+        {
+            using var reg = token.Register(() => completion.TrySetCanceled());
+            return await completion.Task.WithCancellationAsync(token).ConfigureAwait(false);
         }
 
         /// <summary>

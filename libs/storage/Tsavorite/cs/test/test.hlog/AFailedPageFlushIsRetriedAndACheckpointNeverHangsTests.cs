@@ -253,5 +253,79 @@ namespace Tsavorite.test
             }
             finally { Release(store, device, completed); }
         }
+
+        /// <summary>
+        /// A CHECKPOINT THAT FAILED IS ITS CALLER'S FAILURE, WHENEVER THE CALLER ASKS. A run clears the driver's completion when it
+        /// ends, so the driver, asked after a run that failed fast, says nothing is running. A Take form read that answer as its
+        /// checkpoint taken and returned the token (RG: a durability barrier answered a token while a flush fault stood, and the
+        /// token's checkpoint had no metadata on disk). The caller holds the completion of the run it started instead.
+        /// </summary>
+        [Test]
+        [Category("TsavoriteKV")]
+        public void A_checkpoint_that_failed_before_its_caller_asked_is_still_that_callers_failure()
+        {
+            var (store, device) = Build();
+            var completed = false;
+            try
+            {
+                Write(store, 0);
+                device.FailWrites = -1;
+                Write(store, Records, count: 8);   // inside the in-memory region: the checkpoint's own flush is the one refused
+                (completed, _, var thrown) = Checkpoint(store);
+                ClassicAssert.IsTrue(completed, "the CONTROL: the failed checkpoint finishes within the deadline");
+                ClassicAssert.IsInstanceOf<TsavoriteFlushFaultException>(thrown, $"the CONTROL: it fails with the flush fault, got {thrown?.GetType().Name ?? "no exception"}");
+                ClassicAssert.IsNotNull(store.hlogBase.FlushFault, "the CONTROL: the fault stands, so the next run fails as soon as it reaches its flush wait");
+
+                // The caller asks only after its run has ended: the order a caller descheduled between the two steps sees.
+                ClassicAssert.IsTrue(store.TryInitiateHybridLogCheckpoint(out _, out var completion, CheckpointType.FoldOver, null, default), "the CONTROL: a run started");
+                ClassicAssert.IsTrue(SpinWait.SpinUntil(() => completion.Task.IsCompleted, Deadline), "the run did not end within the deadline");
+                ClassicAssert.IsTrue(completion.Task.IsFaulted, "the CONTROL: the run failed");
+                ClassicAssert.IsFalse(store.stateMachineDriver.CompleteAsync().GetAwaiter().GetResult(),
+                    "the CONTROL: asked now, the driver says nothing is running, which is the answer a Take form took for a checkpoint taken");
+
+                var late = Assert.ThrowsAsync<TsavoriteFlushFaultException>(async () => await store.CompleteStartedCheckpointAsync(completion).ConfigureAwait(false));
+                ClassicAssert.AreEqual(112u, late.ErrorCode, "the run's own failure, told to the caller that started it");
+            }
+            finally
+            {
+                device.FailWrites = 0;
+                Release(store, device, completed);
+            }
+        }
+
+        /// <summary>The same through the Take form, by count: with the device refusing every write, no checkpoint is reported taken.</summary>
+        [Test]
+        [Category("TsavoriteKV")]
+        public void No_checkpoint_started_while_a_flush_fault_stands_is_reported_taken()
+        {
+            const int Checkpoints = 2000;
+            var (store, device) = Build();
+            var completed = false;
+            try
+            {
+                Write(store, 0);
+                device.FailWrites = -1;
+                Write(store, Records, count: 8);
+                (completed, _, var thrown) = Checkpoint(store);
+                ClassicAssert.IsTrue(completed, "the CONTROL: the failed checkpoint finishes within the deadline");
+                ClassicAssert.IsInstanceOf<TsavoriteFlushFaultException>(thrown, $"the CONTROL: it fails with the flush fault, got {thrown?.GetType().Name ?? "no exception"}");
+
+                var reported = 0;
+                for (var i = 0; i < Checkpoints; i++)
+                {
+                    (completed, var success, _) = Checkpoint(store);
+                    ClassicAssert.IsTrue(completed, $"checkpoint {i} under the standing fault did not finish within the deadline");
+                    if (success)
+                        reported++;
+                }
+                ClassicAssert.IsNotNull(store.hlogBase.FlushFault, "the CONTROL: the fault stood to the end, so every checkpoint above ran under it");
+                ClassicAssert.AreEqual(0, reported, $"{reported} of {Checkpoints} checkpoints started while the device refused every write were reported taken");
+            }
+            finally
+            {
+                device.FailWrites = 0;
+                Release(store, device, completed);
+            }
+        }
     }
 }
