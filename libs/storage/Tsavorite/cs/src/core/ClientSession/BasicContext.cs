@@ -451,16 +451,16 @@ namespace Tsavorite.core
         /// <inheritdoc/>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Status Delete(TKey key, ref DeleteOptions deleteOptions, TContext userContext = default)
-            => Delete(key, deleteOptions.KeyHash ?? store.storeFunctions.GetKeyHashCode64(key), userContext);
+            => Delete(key, deleteOptions.KeyHash ?? store.storeFunctions.GetKeyHashCode64(key), userContext, deleteOptions.TombstoneNeedNotBeKept);
 
         /// <inheritdoc/>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private Status Delete(TKey key, long keyHash, TContext userContext = default)
+        private Status Delete(TKey key, long keyHash, TContext userContext = default, bool tombstoneNeedNotBeKept = false)
         {
             UnsafeResumeThread();
             try
             {
-                return store.ContextDelete<TKey, TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions, BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(key, keyHash, userContext, sessionFunctions);
+                return store.ContextDelete<TKey, TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions, BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(key, keyHash, userContext, sessionFunctions, tombstoneNeedNotBeKept);
             }
             finally
             {

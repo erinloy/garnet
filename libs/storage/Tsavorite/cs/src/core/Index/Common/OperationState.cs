@@ -54,6 +54,7 @@ namespace Tsavorite.core
             internal const ushort kIsNoKey = 0x0001;
             internal const ushort kIsReadAtAddress = 0x0002;
             internal const ushort kReportsTombstone = 0x0004;
+            internal const ushort kDropsTombstone = 0x0008;
 #pragma warning restore IDE1006 // Naming Styles
 
             internal ReadCopyOptions readCopyOptions;   // Two byte enums
@@ -104,6 +105,9 @@ namespace Tsavorite.core
             }
 
             internal readonly bool IsNoKey => (operationFlags & kIsNoKey) != 0;
+
+            /// <summary>A delete whose caller said its tombstone need not be kept (<see cref="DeleteOptions.TombstoneNeedNotBeKept"/>).</summary>
+            internal readonly bool DropsTombstone => (operationFlags & kDropsTombstone) != 0;
 
             /// <summary>NOTFOUND on a tombstone, flagged <see cref="StatusCode.Tombstoned"/> when the read asked for it.</summary>
             internal readonly OperationStatus TombstoneNotFound => (operationFlags & kReportsTombstone) != 0

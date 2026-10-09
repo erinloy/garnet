@@ -879,7 +879,8 @@ namespace Tsavorite.core
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal Status ContextDelete<TKey, TInput, TOutput, TContext, TSessionFunctionsWrapper>(TKey key, long keyHash, TContext context, TSessionFunctionsWrapper sessionFunctions)
+        internal Status ContextDelete<TKey, TInput, TOutput, TContext, TSessionFunctionsWrapper>(TKey key, long keyHash, TContext context, TSessionFunctionsWrapper sessionFunctions,
+                bool tombstoneNeedNotBeKept = false)
              where TKey : IKey
 #if NET9_0_OR_GREATER
                 , allows ref struct
@@ -887,6 +888,7 @@ namespace Tsavorite.core
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
         {
             var operationState = default(OperationState<TInput, TOutput, TContext>);
+            if (tombstoneNeedNotBeKept) operationState.operationFlags |= OperationState<TInput, TOutput, TContext>.kDropsTombstone;
             OperationStatus internalStatus;
 
             do

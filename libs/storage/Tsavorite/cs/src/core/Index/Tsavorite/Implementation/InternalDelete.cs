@@ -59,8 +59,10 @@ namespace Tsavorite.core
 
             // A store that keeps tombstones (F2: the key's only copy may be in a cold tier) writes one for a key whose tag this index
             // never held; the default store has nothing to delete there and answers NOTFOUND.
+            // A store that keeps tombstones keeps this one unless its caller said it need not be (no older copy of the key lives elsewhere).
+            var keepTombstone = KeepDeleteTombstones && !operationState.DropsTombstone;
             OperationStatus status;
-            if (!(KeepDeleteTombstones
+            if (!(keepTombstone
                     ? FindOrCreateTagAndTryEphemeralXLock<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, out status)
                     : FindTagAndTryEphemeralXLock<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, out status)))
                 return status;
@@ -135,7 +137,7 @@ namespace Tsavorite.core
 
                         // Try to transfer the record from the tag chain to the free record pool iff previous address points to invalid address.
                         // Otherwise an earlier record for this key could be reachable again.
-                        if (!KeepDeleteTombstones && CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info))
+                        if (!keepTombstone && CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info))
                             HandleRecordElision<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, ref srcLogRecord);
 
                         status = OperationStatusUtils.AdvancedOpCode(OperationStatus.SUCCESS, StatusCode.InPlaceUpdatedRecord);
@@ -219,7 +221,7 @@ namespace Tsavorite.core
             AllocateOptions allocOptions = new()
             {
                 recycle = true,
-                elideSourceRecord = !KeepDeleteTombstones && stackCtx.recSrc.HasMainLogSrc && CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info)
+                elideSourceRecord = !(KeepDeleteTombstones && !operationState.DropsTombstone) && stackCtx.recSrc.HasMainLogSrc && CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info)
             };
 
             // We know the existing record cannot be elided; it must point to a valid record; otherwise InternalDelete would have returned NOTFOUND.

@@ -160,6 +160,13 @@ namespace Tsavorite.core
         /// </summary>
         public long? KeyHash { get; internal set; }
 
+        /// <summary>
+        /// In a store that keeps every delete's tombstone (<see cref="KVSettings.KeepDeleteTombstones"/>), says this delete's need not be kept:
+        /// its caller knows no older copy of the key lives in another tier. The delete then does what a store that keeps none does: a key
+        /// this log never held is NotFound and nothing is written, and a tombstone alone on its chain is elided. No effect in a store that keeps none.
+        /// </summary>
+        public bool TombstoneNeedNotBeKept { get; set; }
+
         /// <inheritdoc/>
         public override readonly string ToString() => $"keyHash {Utility.GetHashString(KeyHash)}";
     }
