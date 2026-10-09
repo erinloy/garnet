@@ -97,6 +97,8 @@ namespace Tsavorite.core
                         readInfo.Address = kInvalidAddress;     // ReadCache addresses are not valid for indexing etc. so pass kInvalidAddress.
 
                         srcLogRecord = stackCtx.recSrc.CreateLogRecord();
+                        if (srcLogRecord.Info.Tombstone)
+                            return operationState.TombstoneNotFound;   // the cache holds the tombstone a device read found: deleted, with no device read
                         return sessionFunctions.Reader(in srcLogRecord, ref input, ref output, ref readInfo)
                             ? OperationStatus.SUCCESS
                             : CheckFalseActionStatus(ref readInfo);

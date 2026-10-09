@@ -34,6 +34,8 @@ namespace Tsavorite.core
 
             stackCtx.SetNewRecord(newLogicalAddress | RecordInfo.kIsReadCacheBitMask);
             _ = newLogRecord.TryCopyFrom(in inputLogRecord, in sizeInfo);
+            if (inputLogRecord.Info.Tombstone)
+                newLogRecord.InfoRef.SetTombstone();   // a cached tombstone stays one: its reader is told the key is deleted, never handed a record
 
             // Insert the new record by CAS'ing it into the hash entry (read-cache records are always head-inserted).
             // The head CAS is the single linearization point: a newer main-log record for this key can only be published

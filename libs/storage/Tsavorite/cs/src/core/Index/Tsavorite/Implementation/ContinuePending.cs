@@ -172,6 +172,12 @@ namespace Tsavorite.core
                             // Be consistent with InternalReadAtAddress and return the tombstoned record we retrieved from disk.
                             _ = sessionFunctions.Reader(in pendingState.diskLogRecord, ref pendingState.input.Get(), ref pendingState.output, ref readInfo);
                         }
+                        else if (operationState.readCopyOptions.CopyFrom != ReadCopyFrom.None && operationState.readCopyOptions.CopyTo == ReadCopyTo.ReadCache
+                                && !stackCtx.recSrc.HasReadCacheSrc)
+                        {
+                            // The read cache keeps the tombstone the device read found, as it keeps a live record: the next read of this deleted key is answered in memory.
+                            _ = TryCopyToReadCache(in pendingState.diskLogRecord, sessionFunctions, ref operationState, ref stackCtx);
+                        }
                         return operationState.TombstoneNotFound;
                     }
 
