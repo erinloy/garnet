@@ -555,7 +555,15 @@ namespace Tsavorite.devices
 
                     // If no blob exists for the segment, we must first create the segment asynchronouly. (Create call takes ~70 ms by measurement)
                     // After creation is done, we can call write.
-                    _ = entry.CreateAsync(size, pageBlob);
+                    var createTask = entry.CreateAsync(size, pageBlob);
+                    // On creation failure, remove the entry so the next write retries creation.
+                    createTask.ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                        {
+                            blobs.TryRemove(segmentId, out _);
+                        }
+                    }, TaskContinuationOptions.ExecuteSynchronously);
                 }
                 // Otherwise, some other thread beat us to it. Okay to use their blobs.
                 blobEntry = blobs[segmentId];
@@ -625,6 +633,12 @@ namespace Tsavorite.devices
 
         async Task ReadFromBlobAsync(UnmanagedMemoryStream stream, BlobEntry blob, long sourceAddress, uint readLength, long id)
         {
+            // Fail the read quickly if the blob's creation failed before it was ever created.
+            if (blob.PageBlob.Default == null && blob.CreationException != null)
+            {
+                throw blob.CreationException;
+            }
+
             var token = TokenOf(id);
             using (stream)
             {
@@ -729,6 +743,12 @@ namespace Tsavorite.devices
             if (underLease)
             {
                 await InitialWriterSemaphore.WaitAsync().ConfigureAwait(false);
+            }
+
+            // If creation failed, fail this write with the creation's exception instead of proceeding against a null blob.
+            if (blobEntry.PageBlob.Default == null && blobEntry.CreationException != null)
+            {
+                throw blobEntry.CreationException;
             }
 
             long offset = 0;

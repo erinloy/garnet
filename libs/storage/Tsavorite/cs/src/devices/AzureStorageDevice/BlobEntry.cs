@@ -49,59 +49,82 @@ namespace Tsavorite.devices
         }
 
         /// <summary>
+        /// Exception from a failed creation, if any.
+        /// </summary>
+        public Exception CreationException { get; private set; }
+
+        /// <summary>
         /// Asynchronously invoke create on the given pageBlob.
         /// </summary>
         /// <param name="size">maximum size of the blob</param>
         /// <param name="pageBlob">The page blob to create</param>
         public async Task CreateAsync(long size, BlobUtilsV12.PageBlobClients pageBlob)
         {
-            await azureStorageDevice.BlobManager.PerformWithRetriesAsync(
-                azureStorageDevice.BlobManager.AsynchronousStorageReadMaxConcurrency,
-                true,
-                "PageBlobClient.CreateAsync",
-                "CreateDevice",
-                "",
-                pageBlob.Default.Name,
-                3000,
-                true,
-                async (numAttempts) =>
-                {
-                    var client = (numAttempts > 1) ? pageBlob.Default : pageBlob.Aggressive;
-
-                    var response = await client.CreateAsync(
-                    size: size,
-                    conditions: new Azure.Storage.Blobs.Models.PageBlobRequestConditions() { IfNoneMatch = Azure.ETag.All },
-                    cancellationToken: azureStorageDevice.StorageErrorHandler.Token).ConfigureAwait(false);
-
-                    ETag = response.Value.ETag;
-                    return 1;
-                },
-                async () =>
-                {
-                    var response = await pageBlob.Default.GetPropertiesAsync().ConfigureAwait(false);
-                    ETag = response.Value.ETag;
-                }).ConfigureAwait(false);
-
-            // At this point the blob is fully created. After this line all consequent writers will write immediately. We just
-            // need to clear the queue of pending writers.
-            PageBlob = pageBlob;
-
-            // Take a snapshot of the current waiting count. Exactly this many actions will be cleared.
-            // Swapping in -1 will inform any stragglers that we are not taking their actions and prompt them to retry (and call write directly)
-            int waitingCountSnapshot = Interlocked.Exchange(ref waitingCount, -1);
-            Action action;
-
-            // Clear actions
-            for (int i = 0; i < waitingCountSnapshot; i++)
+            try
             {
-                // inserts into the queue may lag behind the creation thread. We have to wait until that happens.
-                // This is so rare, that we are probably okay with a busy wait.
-                while (!pendingWrites.TryDequeue(out action)) { }
-                action();
-            }
+                await azureStorageDevice.BlobManager.PerformWithRetriesAsync(
+                    azureStorageDevice.BlobManager.AsynchronousStorageReadMaxConcurrency,
+                    true,
+                    "PageBlobClient.CreateAsync",
+                    "CreateDevice",
+                    "",
+                    pageBlob.Default.Name,
+                    3000,
+                    true,
+                    async (numAttempts) =>
+                    {
+                        var client = (numAttempts > 1) ? pageBlob.Default : pageBlob.Aggressive;
 
-            // Mark for deallocation for the GC
-            pendingWrites = null;
+                        var response = await client.CreateAsync(
+                        size: size,
+                        conditions: new Azure.Storage.Blobs.Models.PageBlobRequestConditions() { IfNoneMatch = Azure.ETag.All },
+                        cancellationToken: azureStorageDevice.StorageErrorHandler.Token).ConfigureAwait(false);
+
+                        ETag = response.Value.ETag;
+                        return 1;
+                    },
+                    async () =>
+                    {
+                        var response = await pageBlob.Default.GetPropertiesAsync().ConfigureAwait(false);
+                        ETag = response.Value.ETag;
+                    }).ConfigureAwait(false);
+
+                // At this point the blob is fully created. After this line all consequent writers will write immediately. We just
+                // need to clear the queue of pending writers.
+                PageBlob = pageBlob;
+
+                // Take a snapshot of the current waiting count. Exactly this many actions will be cleared.
+                // Swapping in -1 will inform any stragglers that we are not taking their actions and prompt them to retry (and call write directly)
+                int waitingCountSnapshot = Interlocked.Exchange(ref waitingCount, -1);
+                Action action;
+
+                // Clear actions
+                for (int i = 0; i < waitingCountSnapshot; i++)
+                {
+                    // inserts into the queue may lag behind the creation thread. We have to wait until that happens.
+                    // This is so rare, that we are probably okay with a busy wait.
+                    while (!pendingWrites.TryDequeue(out action)) { }
+                    action();
+                }
+
+                // Mark for deallocation for the GC
+                pendingWrites = null;
+            }
+            catch (Exception ex)
+            {
+                // On creation failure, capture the exception, drain the queue with that exception,
+                // then mark as complete and clear pending writes.
+                CreationException = ex;
+                int waitingCountSnapshot = Interlocked.Exchange(ref waitingCount, -1);
+                Action action;
+                for (int i = 0; i < waitingCountSnapshot; i++)
+                {
+                    while (!pendingWrites.TryDequeue(out action)) { }
+                    try { action(); } catch { /* ignore exceptions from queued actions */ }
+                }
+                pendingWrites = null;
+                throw;
+            }
         }
 
         /// <summary>
