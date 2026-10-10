@@ -328,6 +328,8 @@ namespace Tsavorite.devices
 
             TraceHelper.LeaseProgress("Exited lease maintenance loop");
 
+            var usersWaited = System.Diagnostics.Stopwatch.StartNew();
+            var usersAtStop = LeaseUsers;
             while (LeaseUsers > 0
                 && !StorageErrorHandler.IsTerminated
                 && (leaseTimer?.Elapsed < LeaseDuration))
@@ -335,7 +337,7 @@ namespace Tsavorite.devices
                 await Task.Delay(20).ConfigureAwait(false); // give storage accesses that are in progress and require the lease a chance to complete
             }
 
-            TraceHelper.LeaseProgress("Waited for lease users to complete");
+            TraceHelper.LeaseProgress($"Waited for lease users to complete: {usersAtStop} at the stop, {LeaseUsers} left after {usersWaited.Elapsed.TotalSeconds:F1}s");
 
             // release the lease
             try

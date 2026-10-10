@@ -87,6 +87,20 @@ namespace Tsavorite.devices
                         StorageTracer?.TsavoriteStorageProgress(message);
                         throw new OperationCanceledException(message, e);
                     }
+                    catch (Exception e) when (BlobUtils.IsTransientStorageError(e) && StoreStop.IsAsked(target))
+                    {
+                        // ZILTCH 2026-10-10: the store's stop is asked. Retry at once while its bound and attempts last; then cancel by name and count it.
+                        stopwatch.Stop();
+                        if (StoreStop.MayRetryNow(target))
+                        {
+                            TraceHelper.TsavoritePerfWarning($"storage operation {name} ({intent}) failed on attempt {numAttempts} with the stop asked, retrying in {StoreStop.Pace.TotalMilliseconds:F0}ms");
+                            await Task.Delay(StoreStop.Pace, operationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        HandleStorageError(name, $"storage operation {name} ({intent}) cancelled by the stop after attempt {numAttempts}", target, e, false, true);
+                        throw StoreStop.Cancel(target, name, numAttempts, e);
+                    }
                     catch (Exception e) when (BlobUtils.IsTransientStorageError(e) && numAttempts < MaxRetries)
                     {
                         stopwatch.Stop();
@@ -99,7 +113,7 @@ namespace Tsavorite.devices
                         {
                             TimeSpan nextRetryIn = GetDelayBetweenRetries(numAttempts);
                             HandleStorageError(name, $"storage operation {name} ({intent}) failed transiently on attempt {numAttempts}, retry in {nextRetryIn}s", target, e, false, true);
-                            await Task.Delay(nextRetryIn, operationToken).ConfigureAwait(false);
+                            if (!await StoreStop.BackoffAsync(target, nextRetryIn, operationToken).ConfigureAwait(false)) throw StoreStop.Cancel(target, name, numAttempts, e);
                         }
                         continue;
                     }
