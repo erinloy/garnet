@@ -455,7 +455,9 @@ namespace Tsavorite.core
             if (!GetInitialRecoveryAddress(recoveredICInfo, recoveredHLCInfo, out long recoverFromAddress))
             {
                 await RecoverFuzzyIndexAsync(recoveredICInfo, cancellationToken).ConfigureAwait(false);
+                var scrubClock = System.Diagnostics.Stopwatch.StartNew();
                 var scrubbed = ScrubEntriesAtOrBeyond(recoveredHLCInfo.info.finalLogicalAddress);
+                LastScrubMs = scrubClock.ElapsedMilliseconds;
                 recoveryScrubbedEntries = scrubbed;
                 if (scrubbed > 0)
                     logger?.LogWarning("Recovery cleared {scrubbed} hash index entr(ies) at or beyond the recovered log's final address {finalAddress}: " +

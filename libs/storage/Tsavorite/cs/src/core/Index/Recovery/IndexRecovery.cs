@@ -23,10 +23,15 @@ namespace Tsavorite.core
         // Derived class exposed API
         internal async ValueTask RecoverFuzzyIndexAsync(IndexCheckpointInfo info, CancellationToken cancellationToken)
         {
+            var phase = System.Diagnostics.Stopwatch.StartNew();
             ulong alignedIndexSize = InitializeMainIndexRecovery(ref info, isAsync: true);
+            var mainIssueMs = phase.ElapsedMilliseconds;
             await recoveryCountdown.WaitAsync(cancellationToken).ConfigureAwait(false);
+            var mainReadMs = phase.ElapsedMilliseconds;
             await overflowBucketsAllocator.RecoverAsync(info.main_ht_device, alignedIndexSize, info.info.num_buckets, info.info.num_ofb_bytes, cancellationToken).ConfigureAwait(false);
+            var overflowMs = phase.ElapsedMilliseconds;
             FinalizeMainIndexRecovery(info);
+            LastIndexRecoveryParts = new(mainIssueMs, mainReadMs - mainIssueMs, overflowMs - mainReadMs, phase.ElapsedMilliseconds - overflowMs);
         }
 
         private ulong InitializeMainIndexRecovery(ref IndexCheckpointInfo info, bool isAsync)
@@ -116,6 +121,12 @@ namespace Tsavorite.core
         /// checkpoint's end (and how many log bytes that was), and the post-recovery flush. Zero until a recovery has run.</summary>
         public RecoveryPhases LastRecoveryPhases { get; internal set; }
 
+        /// <summary>The last fuzzy index read split: allocating and issuing the main table, its read, the overflow buckets, and the tentative-entry pass.</summary>
+        public IndexRecoveryParts LastIndexRecoveryParts { get; internal set; }
+
+        /// <summary>The last recovery's scrub pass over every bucket, in milliseconds.</summary>
+        public long LastScrubMs { get; internal set; }
+
         internal long recoveryScrubbedEntries;
 
         /// <summary>Hash entries the last recovery cleared at or past its log's final address: each was the head of a key's chain, so
@@ -135,14 +146,17 @@ namespace Tsavorite.core
         internal unsafe long ScrubEntriesAtOrBeyond(long logFinalAddress)
         {
             long scrubbed = 0;
-            HashBucketEntry entry = default;
             int version = resizeInfo.version;
             var table_size_ = state[version].size;
-            var ptable_ = state[version].tableAligned;
-
-            for (long bucket = 0; bucket < table_size_; bucket++)
+            var table = (nint)state[version].tableAligned;
+            var parts = BucketPartitions(table_size_);
+            Parallel.For(0, parts, part =>
             {
-                HashBucket* b = ptable_ + bucket;
+                long partScrubbed = 0;
+                HashBucketEntry entry = default;
+                for (long bucket = table_size_ * part / parts, end = table_size_ * (part + 1) / parts; bucket < end; bucket++)
+                {
+                HashBucket* b = (HashBucket*)table + bucket;
                 while (true)
                 {
                     for (int bucket_entry = 0; bucket_entry < Constants.kOverflowBucketIndex; bucket_entry++)
@@ -154,28 +168,35 @@ namespace Tsavorite.core
                         if (address != LogAddress.kInvalidAddress && address >= logFinalAddress)
                         {
                             b->bucket_entries[bucket_entry] = 0;
-                            scrubbed++;
+                            partScrubbed++;
                         }
                     }
                     var overflow = b->bucket_entries[Constants.kOverflowBucketIndex] & (long)LogAddress.kAddressBitMask;
                     if (overflow == 0) break;
                     b = (HashBucket*)overflowBucketsAllocator.GetPhysicalAddress(overflow);
                 }
-            }
+                }
+                _ = Interlocked.Add(ref scrubbed, partScrubbed);
+            });
             return scrubbed;
         }
 
+        // Each bucket's chain (the bucket and its overflow buckets) is its own, so a pass over the table runs by bucket ranges in
+        // parallel: on the mesh broker's 33.5M buckets + 29.5M overflow, each serial pass took 10 s of a 29 s open.
+        private static int BucketPartitions(long tableSize) => (int)Math.Clamp(tableSize >> 16, 1, Environment.ProcessorCount);
+
         internal unsafe void DeleteTentativeEntries()
         {
-            HashBucketEntry entry = default;
-
             int version = resizeInfo.version;
             var table_size_ = state[version].size;
-            var ptable_ = state[version].tableAligned;
-
-            for (long bucket = 0; bucket < table_size_; bucket++)
+            var table = (nint)state[version].tableAligned;
+            var parts = BucketPartitions(table_size_);
+            Parallel.For(0, parts, part =>
             {
-                HashBucket* b = ptable_ + bucket;
+            HashBucketEntry entry = default;
+            for (long bucket = table_size_ * part / parts, end = table_size_ * (part + 1) / parts; bucket < end; bucket++)
+            {
+                HashBucket* b = (HashBucket*)table + bucket;
                 while (true)
                 {
                     for (int bucket_entry = 0; bucket_entry < Constants.kOverflowBucketIndex; bucket_entry++)
@@ -190,8 +211,12 @@ namespace Tsavorite.core
                     b = (HashBucket*)overflowBucketsAllocator.GetPhysicalAddress(b->bucket_entries[Constants.kOverflowBucketIndex]);
                 }
             }
+            });
         }
     }
     /// <summary>The time a recovery spent by phase; see <see cref="TsavoriteBase.LastRecoveryPhases"/>.</summary>
     public readonly record struct RecoveryPhases(long IndexMs, long ReplayMs, long ReplayBytes, long PostMs);
+
+    /// <summary>The fuzzy index read by part; see <see cref="TsavoriteBase.LastIndexRecoveryParts"/>.</summary>
+    public readonly record struct IndexRecoveryParts(long AllocateAndIssueMs, long MainReadMs, long OverflowMs, long TentativePassMs);
 }
