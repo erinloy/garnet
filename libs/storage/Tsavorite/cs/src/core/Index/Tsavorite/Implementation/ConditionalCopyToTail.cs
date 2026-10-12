@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace Tsavorite.core
 {
@@ -12,6 +13,11 @@ namespace Tsavorite.core
         where TStoreFunctions : IStoreFunctions
         where TAllocator : IAllocator<TStoreFunctions>
     {
+        long compactionSourcesWithoutTag;
+
+        /// <summary>Records a lookup compaction met whose key has no hash-index entry: unreachable by any read, so dropped and never linked.</summary>
+        public long CompactionSourcesWithoutTag => Interlocked.Read(ref compactionSourcesWithoutTag);
+
         /// <summary>
         /// Copy a record to the tail of the log after caller has verified it does not exist within a specified range.
         /// </summary>
@@ -111,10 +117,17 @@ namespace Tsavorite.core
                 while (sessionFunctions.Store.HandleImmediateNonPendingRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(status, sessionFunctions));
 
                 // NOTFOUND has one writer: the key's tag has no index entry, and the search left no bucket to link a record into.
-                // Compaction never meets it (its source is in this log). F2's copy from a cold store does: create the tag, as an Upsert
-                // of a new key does, and search again on the live entry, because another session may have appended under it meanwhile.
-                if (status != OperationStatus.NOTFOUND || !createTag)
+                // F2's copy from a cold store creates the tag, as an Upsert of a new key does, and searches again on the live entry,
+                // because another session may have appended under it meanwhile.
+                if (status != OperationStatus.NOTFOUND)
                     break;
+                // Compaction meets it too (rg 2026-10-12, a broker store: a valid first-version record above BeginAddress whose key had
+                // no tag): no read starts anywhere but the tag, so the record is unreachable and there is nothing to carry. Counted, not linked.
+                if (!createTag)
+                {
+                    _ = Interlocked.Increment(ref compactionSourcesWithoutTag);
+                    return Status.CreateNotFound();
+                }
                 if (sessionFunctions.Ctx.phase == Phase.IN_PROGRESS_GROW)
                     SplitBuckets(stackCtx.hei.hash);
                 FindOrCreateTag(ref stackCtx.hei, hlogBase.BeginAddress);
