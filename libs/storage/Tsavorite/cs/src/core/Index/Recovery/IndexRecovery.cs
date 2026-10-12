@@ -112,6 +112,10 @@ namespace Tsavorite.core
             recoveryCountdown.Decrement();
         }
 
+        /// <summary>Where the last recovery's time went: the index read (and scrub), the log replay from the index's start to the log
+        /// checkpoint's end (and how many log bytes that was), and the post-recovery flush. Zero until a recovery has run.</summary>
+        public RecoveryPhases LastRecoveryPhases { get; internal set; }
+
         internal long recoveryScrubbedEntries;
 
         /// <summary>Hash entries the last recovery cleared at or past its log's final address: each was the head of a key's chain, so
@@ -188,4 +192,6 @@ namespace Tsavorite.core
             }
         }
     }
+    /// <summary>The time a recovery spent by phase; see <see cref="TsavoriteBase.LastRecoveryPhases"/>.</summary>
+    public readonly record struct RecoveryPhases(long IndexMs, long ReplayMs, long ReplayBytes, long PostMs);
 }

@@ -150,5 +150,41 @@ namespace Tsavorite.test
             }
             DeleteDirectory(MethodTestDir);
         }
+
+        /// <summary>A recovery says where its time went: the log it replays is the span from the index checkpoint's start to the
+        /// log checkpoint's end, so writes between an older index and a newer log checkpoint are the replay bytes it reports.</summary>
+        [Test]
+        [Category("TsavoriteKV")]
+        public async Task A_recovery_names_the_log_bytes_it_replayed_past_its_index()
+        {
+            DeleteDirectory(MethodTestDir);
+            _ = Directory.CreateDirectory(MethodTestDir);
+            Guid logToken, indexToken;
+            long indexStart, logFinal;
+            {
+                using var device = Devices.CreateLogDevice(Path.Join(MethodTestDir, "phases.log"));
+                using var store = Open(device);
+                Upsert(store, 0, Before);
+                (var indexOk, indexToken) = await store.TakeIndexCheckpointAsync();
+                ClassicAssert.IsTrue(indexOk);
+                indexStart = LineAsLong(Encoding.UTF8.GetString(store.CheckpointManager.GetIndexCheckpointMetadata(indexToken)).Split('\n').Select(l => l.Trim()).ToArray(), 7);
+                Upsert(store, Before, After);
+                (var logOk, logToken) = await store.TakeHybridLogCheckpointAsync(CheckpointType.FoldOver);
+                ClassicAssert.IsTrue(logOk);
+                logFinal = LineAsLong(Encoding.UTF8.GetString(store.CheckpointManager.GetLogCheckpointMetadata(logToken)).Split('\n').Select(l => l.Trim()).ToArray(), 9);
+            }
+            using (var device = Devices.CreateLogDevice(Path.Join(MethodTestDir, "phases.log")))
+            using (var store = Open(device))
+            {
+                ClassicAssert.AreEqual(default(RecoveryPhases), store.LastRecoveryPhases, "the control: no recovery, no phases");
+                _ = await store.RecoverAsync(indexToken, logToken);
+                var phases = store.LastRecoveryPhases;
+                ClassicAssert.Greater(logFinal, indexStart, "the control: the log checkpoint holds writes past the index");
+                ClassicAssert.AreEqual(logFinal - indexStart, phases.ReplayBytes, "the replay is the log from the index's start to the log checkpoint's end");
+                ClassicAssert.IsTrue(phases.IndexMs >= 0 && phases.ReplayMs >= 0 && phases.PostMs >= 0);
+                ClassicAssert.IsTrue(Read(store, Before + After / 2).Found, "the control: a record only the replay restored reads");
+            }
+            DeleteDirectory(MethodTestDir);
+        }
     }
 }

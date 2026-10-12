@@ -451,6 +451,7 @@ namespace Tsavorite.core
                 Reset();
             }
 
+            var phase = System.Diagnostics.Stopwatch.StartNew();
             if (!GetInitialRecoveryAddress(recoveredICInfo, recoveredHLCInfo, out long recoverFromAddress))
             {
                 await RecoverFuzzyIndexAsync(recoveredICInfo, cancellationToken).ConfigureAwait(false);
@@ -464,6 +465,8 @@ namespace Tsavorite.core
             if (!SetRecoveryPageRanges(recoveredHLCInfo, numPagesToPreload, recoverFromAddress, out long tailAddress, out long headAddress, out long scanFromAddress))
                 return -1;
             RecoveryOptions options = new(fuzzyRegionStartAddress: recoveredHLCInfo.info.startLogicalAddress, undoNextVersion);
+            var indexMs = phase.ElapsedMilliseconds;
+            phase.Restart();
 
             // Make index consistent for version v
             long readOnlyAddress;
@@ -506,7 +509,10 @@ namespace Tsavorite.core
                 readOnlyAddress = recoveredHLCInfo.info.flushedLogicalAddress;
             }
 
+            var replayMs = phase.ElapsedMilliseconds;
+            phase.Restart();
             DoPostRecovery(recoveredICInfo, recoveredHLCInfo, tailAddress, finalHeadAddress, readOnlyAddress);
+            LastRecoveryPhases = new(indexMs, replayMs, recoveredHLCInfo.info.finalLogicalAddress - recoverFromAddress, phase.ElapsedMilliseconds);
             return recoveredHLCInfo.info.version;
         }
 
