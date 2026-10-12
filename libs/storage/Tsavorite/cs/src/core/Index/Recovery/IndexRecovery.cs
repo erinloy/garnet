@@ -112,6 +112,12 @@ namespace Tsavorite.core
             recoveryCountdown.Decrement();
         }
 
+        internal long recoveryScrubbedEntries;
+
+        /// <summary>Hash entries the last recovery cleared at or past its log's final address: each was the head of a key's chain, so
+        /// nonzero means older records of those keys are left in the log with no index entry (a mismatched checkpoint pair).</summary>
+        public long RecoveryScrubbedEntries => Interlocked.Read(ref recoveryScrubbedEntries);
+
         /// <summary>
         /// DEFENCE IN DEPTH AT RECOVERY: clears every main-log hash entry whose address is at or beyond
         /// <paramref name="logFinalAddress"/>, the recovered log's final address, and returns how many it cleared. No such entry

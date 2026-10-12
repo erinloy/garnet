@@ -140,6 +140,7 @@ namespace Tsavorite.test
             using (var store = Open(device, logger))
             {
                 _ = await store.RecoverAsync(indexToken, logToken);
+                ClassicAssert.AreEqual((long)After, store.RecoveryScrubbedEntries, "the count the store reports is every entry the scrub cleared: one per key only the index named");
 
                 ClassicAssert.IsTrue(Read(store, Before / 2).Found, "the control: a record inside the log checkpoint recovers and reads");
                 ClassicAssert.IsTrue(Read(store, Before + After / 2).NotFound,
