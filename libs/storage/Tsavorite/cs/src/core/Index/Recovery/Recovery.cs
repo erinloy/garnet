@@ -1320,6 +1320,14 @@ namespace Tsavorite.core
                     continue;
                 }
 
+                if (!info.Invalid && !logRecord.IsPinnedKey)
+                {
+                    // A key over the inline ceiling cannot be read here (no object map at recovery): skip and count it.
+                    System.Threading.Interlocked.Increment(ref RecoveryOverflowKeys.SkippedCount);
+                    recordOffset += logRecord.AllocatedSize;
+                    continue;
+                }
+
                 if (!info.Invalid)
                 {
                     HashEntryInfo hei = new(storeFunctions.GetKeyHashCode64(logRecord));
@@ -1479,5 +1487,15 @@ namespace Tsavorite.core
 
             result.DisposeHandle();
         }
+    }
+}
+namespace Tsavorite.core
+{
+    /// <summary>Records skipped by recovery because their key was not inline.</summary>
+    public static class RecoveryOverflowKeys
+    {
+        internal static long SkippedCount;
+        /// <summary>How many this process skipped.</summary>
+        public static long Skipped => System.Threading.Interlocked.Read(ref SkippedCount);
     }
 }
