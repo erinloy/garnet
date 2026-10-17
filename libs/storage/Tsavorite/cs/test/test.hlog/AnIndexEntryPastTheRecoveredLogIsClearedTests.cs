@@ -151,6 +151,69 @@ namespace Tsavorite.test
             DeleteDirectory(MethodTestDir);
         }
 
+        // the key's entry rewritten to its record's address + 3; every key sharing that bucket and tag is listed, since it shares the chain
+        private static unsafe (long Corrupt, long Bucket, ushort Tag) CorruptTheEntryOf(TsavoriteKV<StructStoreFunctions, StructAllocator> store, int victim, HashSet<int> sharing)
+        {
+            HashEntryInfo Entry(int i) => new(store.storeFunctions.GetKeyHashCode64(new KeyStruct { kfield1 = i, kfield2 = i + 1 }));
+            var hei = Entry(victim);
+            ClassicAssert.IsTrue(store.FindTag(ref hei), "CONTROL: the key has an entry");
+            var (corrupt, bucket, tag) = (hei.Address + 3, hei.bucketIndex, hei.tag);
+            for (var i = 0; i < Before; i++)
+            {
+                var other = Entry(i);
+                if (store.FindTag(ref other) && other.bucketIndex == bucket && other.tag == tag) _ = sharing.Add(i);
+            }
+            hei.entry.Set(corrupt, tag);
+            hei.bucket->bucket_entries[hei.slot] = hei.entry.word;
+            return (corrupt, bucket, tag);
+        }
+
+        /// <summary>A HASH ENTRY OFF THE RECORD ALIGNMENT IS NAMED AND CLEARED AT RECOVERY. The mesh broker's index held one (10-15..17,
+        /// log:6627540995, 3 past an 8-byte boundary): no record starts there, so every read of that tag's chain ended at it as not
+        /// found, 230 times in two days. The entry is BUILT here: a key's entry is rewritten to its record's address + 3, then both
+        /// checkpoints are taken, so the corrupt link is in the index snapshot recovery reads.</summary>
+        [Test]
+        [Category("TsavoriteKV")]
+        public async Task A_hash_entry_off_the_record_alignment_is_named_and_cleared_at_recovery()
+        {
+            DeleteDirectory(MethodTestDir);
+            _ = Directory.CreateDirectory(MethodTestDir);
+            Guid token;
+            long corrupt, bucket;
+            ushort tag;
+            var victim = Before / 2;
+            var sharing = new HashSet<int>();
+            {
+                using var device = Devices.CreateLogDevice(Path.Join(MethodTestDir, "align.log"));
+                using var store = Open(device);
+                Upsert(store, 0, Before);
+                store.Log.FlushAndEvict(wait: true);
+                (corrupt, bucket, tag) = CorruptTheEntryOf(store, victim, sharing);
+                (var ok, token) = await store.TakeFullCheckpointAsync(CheckpointType.FoldOver);
+                ClassicAssert.IsTrue(ok);
+            }
+
+            var logger = new CapturingLogger();
+            using (var device = Devices.CreateLogDevice(Path.Join(MethodTestDir, "align.log")))
+            using (var store = Open(device, logger))
+            {
+                _ = await store.RecoverAsync(token, token);
+                ClassicAssert.AreEqual(1L, store.RecoveryMisalignedEntries, "the one corrupt entry, and only it");
+                ClassicAssert.AreEqual(0L, store.RecoveryScrubbedEntries, "control: nothing was past the log");
+                CollectionAssert.AreEqual(new[] { (bucket, tag, corrupt) }, store.LastMisalignedEntries.ToArray(), "it is named by bucket, tag and the address it held");
+                ClassicAssert.IsTrue(logger.Warnings.Any(w => w.Contains("off the 8-byte record alignment") && w.Contains($"bucket {bucket} tag {tag}")),
+                    "recovery names it: " + string.Join(" | ", logger.Warnings));
+                for (var i = 0; i < Before; i++)
+                {
+                    var status = Read(store, i);
+                    if (sharing.Contains(i)) ClassicAssert.IsTrue(status.NotFound, $"key {i} shared the cleared chain: it stays unreachable, as it was ({status})");
+                    else ClassicAssert.IsTrue(status.Found, $"key {i} reads ({status})");
+                }
+                ClassicAssert.IsFalse(logger.Warnings.Any(w => w.Contains("Pending read of")), "no read meets the corrupt link again");
+            }
+            DeleteDirectory(MethodTestDir);
+        }
+
         /// <summary>A recovery says where its time went: the log it replays is the span from the index checkpoint's start to the
         /// log checkpoint's end, so writes between an older index and a newer log checkpoint are the replay bytes it reports.</summary>
         [Test]

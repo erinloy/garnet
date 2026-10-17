@@ -133,6 +133,17 @@ namespace Tsavorite.core
         /// nonzero means older records of those keys are left in the log with no index entry (a mismatched checkpoint pair).</summary>
         public long RecoveryScrubbedEntries => Interlocked.Read(ref recoveryScrubbedEntries);
 
+        internal long recoveryMisalignedEntries;
+
+        /// <summary>Hash entries the last recovery cleared because their address is off the record alignment: no record starts there, so
+        /// each was a corrupt link and every read of its tag's chain ended at it as not found (mesh broker 10-15..17: log:6627540995).</summary>
+        public long RecoveryMisalignedEntries => Interlocked.Read(ref recoveryMisalignedEntries);
+
+        /// <summary>The first misaligned entries the last recovery cleared, by bucket, tag and the address they named: where to look for
+        /// the records their chains held.</summary>
+        public System.Collections.Generic.IReadOnlyList<(long Bucket, ushort Tag, long Address)> LastMisalignedEntries { get; internal set; } = [];
+        private const int MisalignedNamed = 16;
+
         /// <summary>
         /// DEFENCE IN DEPTH AT RECOVERY: clears every main-log hash entry whose address is at or beyond
         /// <paramref name="logFinalAddress"/>, the recovered log's final address, and returns how many it cleared. No such entry
@@ -145,14 +156,15 @@ namespace Tsavorite.core
         /// </summary>
         internal unsafe long ScrubEntriesAtOrBeyond(long logFinalAddress)
         {
-            long scrubbed = 0;
+            long scrubbed = 0, misaligned = 0;
+            var named = new System.Collections.Concurrent.ConcurrentQueue<(long Bucket, ushort Tag, long Address)>();
             int version = resizeInfo.version;
             var table_size_ = state[version].size;
             var table = (nint)state[version].tableAligned;
             var parts = BucketPartitions(table_size_);
             Parallel.For(0, parts, part =>
             {
-                long partScrubbed = 0;
+                long partScrubbed = 0, partMisaligned = 0;
                 HashBucketEntry entry = default;
                 for (long bucket = table_size_ * part / parts, end = table_size_ * (part + 1) / parts; bucket < end; bucket++)
                 {
@@ -170,6 +182,12 @@ namespace Tsavorite.core
                             b->bucket_entries[bucket_entry] = 0;
                             partScrubbed++;
                         }
+                        else if ((address & (Constants.kRecordAlignment - 1)) != 0)
+                        {
+                            if (named.Count < MisalignedNamed) named.Enqueue((bucket, entry.Tag, address));
+                            b->bucket_entries[bucket_entry] = 0;
+                            partMisaligned++;
+                        }
                     }
                     var overflow = b->bucket_entries[Constants.kOverflowBucketIndex] & (long)LogAddress.kAddressBitMask;
                     if (overflow == 0) break;
@@ -177,7 +195,10 @@ namespace Tsavorite.core
                 }
                 }
                 _ = Interlocked.Add(ref scrubbed, partScrubbed);
+                _ = Interlocked.Add(ref misaligned, partMisaligned);
             });
+            recoveryMisalignedEntries = misaligned;
+            LastMisalignedEntries = [.. System.Linq.Enumerable.OrderBy(named, n => n.Bucket)];
             return scrubbed;
         }
 
