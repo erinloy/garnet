@@ -182,7 +182,7 @@ namespace Tsavorite.core
                             b->bucket_entries[bucket_entry] = 0;
                             partScrubbed++;
                         }
-                        else if ((address & (Constants.kRecordAlignment - 1)) != 0)
+                        else if (address > LogAddress.kTempInvalidAddress && (address & (Constants.kRecordAlignment - 1)) != 0)   // kTempInvalid is a tag reserved with no record yet, not a link
                         {
                             if (named.Count < MisalignedNamed) named.Enqueue((bucket, entry.Tag, address));
                             b->bucket_entries[bucket_entry] = 0;

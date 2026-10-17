@@ -165,6 +165,9 @@ namespace Tsavorite.test
             }
             hei.entry.Set(corrupt, tag);
             hei.bucket->bucket_entries[hei.slot] = hei.entry.word;
+            HashEntryInfo reserved = new(store.storeFunctions.GetKeyHashCode64(new KeyStruct { kfield1 = -7, kfield2 = -6 }));
+            store.FindOrCreateTag(ref reserved, store.Log.BeginAddress);   // a tag reserved with no record: its address is kTempInvalid, which is no link
+            ClassicAssert.AreEqual(LogAddress.kTempInvalidAddress, reserved.entry.Address, "CONTROL: a reserved tag holds kTempInvalid");
             return (corrupt, bucket, tag);
         }
 
@@ -198,7 +201,7 @@ namespace Tsavorite.test
             using (var store = Open(device, logger))
             {
                 _ = await store.RecoverAsync(token, token);
-                ClassicAssert.AreEqual(1L, store.RecoveryMisalignedEntries, "the one corrupt entry, and only it");
+                ClassicAssert.AreEqual(1L, store.RecoveryMisalignedEntries, "the one corrupt entry, and only it: a reserved tag's kTempInvalid is not counted (mesh broker 10-17: 227 counted, all kTempInvalid)");
                 ClassicAssert.AreEqual(0L, store.RecoveryScrubbedEntries, "control: nothing was past the log");
                 CollectionAssert.AreEqual(new[] { (bucket, tag, corrupt) }, store.LastMisalignedEntries.ToArray(), "it is named by bucket, tag and the address it held");
                 ClassicAssert.IsTrue(logger.Warnings.Any(w => w.Contains("off the 8-byte record alignment") && w.Contains($"bucket {bucket} tag {tag}")),
