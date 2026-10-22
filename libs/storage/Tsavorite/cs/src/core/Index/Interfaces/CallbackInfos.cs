@@ -63,7 +63,8 @@ namespace Tsavorite.core
 
         /// <summary>
         /// Set before InitialWriter: true when the record this upsert replaces is in the main log in memory (mutable or read-only
-        /// region), so <see cref="SourceTombstone"/> is known. False for a new key and for a source only on disk.
+        /// region), so <see cref="SourceTombstone"/> is known. False for a new key and for a source only on disk. A read-only record is
+        /// reported but not used as the write's source: the insert over it is still blind.
         /// </summary>
         public bool SourceInMemory { get; internal set; }
 

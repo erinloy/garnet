@@ -172,6 +172,19 @@ namespace Tsavorite.core
                 // No record exists, or readonly or below. Drop through to create new record.
                 Debug.Assert(!sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei), "A Transactional-session Upsert() of an on-disk or non-existent key requires a LockTable lock");
 
+                // The insert stays blind, but when the record it replaces is still in memory (read-only region), say what it is: the search
+                // above stopped at ReadOnlyAddress with recSrc.LogicalAddress on the first record it did not examine.
+                if (stackCtx.recSrc.LogicalAddress >= hlogBase.HeadAddress
+                        && TraceBackForKeyMatch(key, stackCtx.recSrc.LogicalAddress, hlogBase.HeadAddress, out _, out var replacedPhysicalAddress))
+                {
+                    var replacedInfo = LogRecord.GetInfo(replacedPhysicalAddress);
+                    if (!replacedInfo.IsClosed)
+                    {
+                        upsertInfo.SourceInMemory = true;
+                        upsertInfo.SourceTombstone = replacedInfo.Tombstone;
+                    }
+                }
+
             CreateNewRecord:
                 status = CreateNewRecordUpsert<TKey, TValueSelector, TInput, TOutput, TContext, TSessionFunctionsWrapper, TSourceLogRecord>(
                         key, ref srcLogRecord, ref input, srcStringValue, srcObjectValue, in inputLogRecord, ref output, ref operationState, sessionFunctions, ref stackCtx, ref upsertInfo);
@@ -325,8 +338,11 @@ namespace Tsavorite.core
 
             upsertInfo.Address = newLogicalAddress;
             upsertInfo.KeyHash = stackCtx.hei.hash;
-            upsertInfo.SourceInMemory = stackCtx.recSrc.HasMainLogSrc;
-            upsertInfo.SourceTombstone = stackCtx.recSrc.HasMainLogSrc && srcLogRecord.Info.Tombstone;
+            if (stackCtx.recSrc.HasMainLogSrc)   // else InternalUpsert may already have set them from a read-only record it did not take as its source
+            {
+                upsertInfo.SourceInMemory = true;
+                upsertInfo.SourceTombstone = srcLogRecord.Info.Tombstone;
+            }
 
             // Type arg specification is needed because we don't pass TContext
             var success = TValueSelector.InitialWriter<TSourceLogRecord, TInput, TOutput, TContext, TSessionFunctionsWrapper>(
