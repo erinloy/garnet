@@ -147,6 +147,13 @@ namespace Tsavorite.core
         public bool ElideDeletedRecords = true;
 
         /// <summary>
+        /// Whether a blind upsert whose key's record is in the read-only region reports it in <see cref="UpsertInfo.SourceInMemory"/> and
+        /// <see cref="UpsertInfo.SourceTombstone"/>: one trace back of the key's chain down to HeadAddress. Off, those report only a source
+        /// the upsert took (the mutable region).
+        /// </summary>
+        public bool ReportReadOnlyUpsertSource = false;
+
+        /// <summary>
         /// Epoch instance used by the store
         /// </summary>
         public LightEpoch Epoch = null;

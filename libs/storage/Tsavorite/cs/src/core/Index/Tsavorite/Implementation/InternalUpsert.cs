@@ -174,7 +174,7 @@ namespace Tsavorite.core
 
                 // The insert stays blind, but when the record it replaces is still in memory (read-only region), say what it is: the search
                 // above stopped at ReadOnlyAddress with recSrc.LogicalAddress on the first record it did not examine.
-                if (stackCtx.recSrc.LogicalAddress >= hlogBase.HeadAddress
+                if (ReportReadOnlyUpsertSource && stackCtx.recSrc.LogicalAddress >= hlogBase.HeadAddress
                         && TraceBackForKeyMatch(key, stackCtx.recSrc.LogicalAddress, hlogBase.HeadAddress, out _, out var replacedPhysicalAddress))
                 {
                     var replacedInfo = LogRecord.GetInfo(replacedPhysicalAddress);

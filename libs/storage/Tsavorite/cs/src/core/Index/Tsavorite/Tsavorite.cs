@@ -37,6 +37,8 @@ namespace Tsavorite.core
         internal readonly bool KeepDeleteTombstones;
         /// <summary>From <see cref="KVSettings.ElideDeletedRecords"/>.</summary>
         internal readonly bool ElideDeletedRecords;
+        /// <summary>From <see cref="KVSettings.ReportReadOnlyUpsertSource"/>.</summary>
+        internal readonly bool ReportReadOnlyUpsertSource;
         internal readonly StateMachineDriver stateMachineDriver;
 
         /// <summary>
@@ -243,6 +245,7 @@ namespace Tsavorite.core
                 InitialIORecordSize = kvSettings.InitialIORecordSize;
                 KeepDeleteTombstones = kvSettings.KeepDeleteTombstones;
                 ElideDeletedRecords = kvSettings.ElideDeletedRecords;
+                ReportReadOnlyUpsertSource = kvSettings.ReportReadOnlyUpsertSource;
                 Initialize(kvSettings.GetIndexSizeCacheLines(), sectorSize);
 
                 LockTable = new OverflowBucketLockTable<TStoreFunctions, TAllocator>(this);
