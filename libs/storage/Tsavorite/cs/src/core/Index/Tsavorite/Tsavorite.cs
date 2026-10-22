@@ -35,6 +35,8 @@ namespace Tsavorite.core
         internal readonly int InitialIORecordSize;
         /// <summary>From <see cref="KVSettings.KeepDeleteTombstones"/>: a delete never elides its record.</summary>
         internal readonly bool KeepDeleteTombstones;
+        /// <summary>From <see cref="KVSettings.ElideDeletedRecords"/>.</summary>
+        internal readonly bool ElideDeletedRecords;
         internal readonly StateMachineDriver stateMachineDriver;
 
         /// <summary>
@@ -240,6 +242,7 @@ namespace Tsavorite.core
                 sectorSize = (int)logSettings.LogDevice.SectorSize;
                 InitialIORecordSize = kvSettings.InitialIORecordSize;
                 KeepDeleteTombstones = kvSettings.KeepDeleteTombstones;
+                ElideDeletedRecords = kvSettings.ElideDeletedRecords;
                 Initialize(kvSettings.GetIndexSizeCacheLines(), sectorSize);
 
                 LockTable = new OverflowBucketLockTable<TStoreFunctions, TAllocator>(this);

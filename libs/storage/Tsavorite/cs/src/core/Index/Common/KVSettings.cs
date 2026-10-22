@@ -140,6 +140,13 @@ namespace Tsavorite.core
         public bool KeepDeleteTombstones = false;
 
         /// <summary>
+        /// Whether a delete of a key's only record may elide it: clear its hash entry and invalidate the record. A store recovered from
+        /// a fuzzy index checkpoint sets this false: the elided record is Invalid, so replay skips it, and the checkpoint's entry for the
+        /// key reads back an older copy of it. A delete then leaves its tombstone, and compaction drops it as usual.
+        /// </summary>
+        public bool ElideDeletedRecords = true;
+
+        /// <summary>
         /// Epoch instance used by the store
         /// </summary>
         public LightEpoch Epoch = null;
