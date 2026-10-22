@@ -282,9 +282,10 @@ namespace Tsavorite.core
         /// <param name="cf">User provided compaction functions (see <see cref="ICompactionFunctions"/>)</param>
         /// <param name="untilAddress">Compact log until this address</param>
         /// <param name="compactionType">Compaction type (whether we lookup records or scan log for liveness checking)</param>
+        /// <param name="shiftBeginAddress">Whether compaction shifts BeginAddress to the address it reached (the default). A caller that must order the shift against its own work, such as a checkpoint of another store, passes false and shifts BeginAddress itself to the returned address.</param>
         /// <returns>Address until which compaction was done</returns>
-        public long Compact<TInput, TOutput, TContext, TCompactionFunctions>(TCompactionFunctions cf, long untilAddress, CompactionType compactionType)
+        public long Compact<TInput, TOutput, TContext, TCompactionFunctions>(TCompactionFunctions cf, long untilAddress, CompactionType compactionType, bool shiftBeginAddress = true)
             where TCompactionFunctions : ICompactionFunctions
-            => store.Compact<TInput, TOutput, TContext, TCompactionFunctions>(cf, untilAddress, compactionType);
+            => store.Compact<TInput, TOutput, TContext, TCompactionFunctions>(cf, untilAddress, compactionType, shiftBeginAddress);
     }
 }

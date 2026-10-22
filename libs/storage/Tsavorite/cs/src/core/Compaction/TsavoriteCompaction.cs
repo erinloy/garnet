@@ -17,19 +17,20 @@ namespace Tsavorite.core
         /// <param name="cf">User provided compaction functions (see <see cref="ICompactionFunctions"/>).</param>
         /// <param name="untilAddress">Compact log until this address</param>
         /// <param name="compactionType">Compaction type (whether we lookup records or scan log for liveness checking)</param>
+        /// <param name="shiftBeginAddress">Whether compaction shifts BeginAddress to the address it reached (the default). A caller that must order the shift against its own work, such as a checkpoint of another store, passes false and shifts BeginAddress itself to the returned address.</param>
         /// <returns>Address until which compaction was done</returns>
-        internal long Compact<TInput, TOutput, TContext, TCompactionFunctions>(TCompactionFunctions cf, long untilAddress, CompactionType compactionType)
+        internal long Compact<TInput, TOutput, TContext, TCompactionFunctions>(TCompactionFunctions cf, long untilAddress, CompactionType compactionType, bool shiftBeginAddress = true)
             where TCompactionFunctions : ICompactionFunctions
         {
             return compactionType switch
             {
-                CompactionType.Scan => CompactScan<TInput, TOutput, TContext, TCompactionFunctions>(cf, untilAddress),
-                CompactionType.Lookup => CompactLookup<TInput, TOutput, TContext, TCompactionFunctions>(cf, untilAddress),
+                CompactionType.Scan => CompactScan<TInput, TOutput, TContext, TCompactionFunctions>(cf, untilAddress, shiftBeginAddress),
+                CompactionType.Lookup => CompactLookup<TInput, TOutput, TContext, TCompactionFunctions>(cf, untilAddress, shiftBeginAddress),
                 _ => throw new TsavoriteException("Invalid compaction type"),
             };
         }
 
-        private long CompactLookup<TInput, TOutput, TContext, TCompactionFunctions>(TCompactionFunctions cf, long untilAddress)
+        private long CompactLookup<TInput, TOutput, TContext, TCompactionFunctions>(TCompactionFunctions cf, long untilAddress, bool shiftBeginAddress)
             where TCompactionFunctions : ICompactionFunctions
         {
             if (untilAddress > hlogBase.SafeReadOnlyAddress)
@@ -63,11 +64,12 @@ namespace Tsavorite.core
                 if (numPending > 0)
                     _ = storebContext.CompletePending(wait: true);
             }
-            Log.ShiftBeginAddress(untilAddress, false);
+            if (shiftBeginAddress)
+                Log.ShiftBeginAddress(untilAddress, false);
             return untilAddress;
         }
 
-        private long CompactScan<TInput, TOutput, TContext, TCompactionFunctions>(TCompactionFunctions cf, long untilAddress)
+        private long CompactScan<TInput, TOutput, TContext, TCompactionFunctions>(TCompactionFunctions cf, long untilAddress, bool shiftBeginAddress)
             where TCompactionFunctions : ICompactionFunctions
         {
             if (untilAddress > hlogBase.SafeReadOnlyAddress)
@@ -139,7 +141,8 @@ namespace Tsavorite.core
                 if (numPending > 0)
                     _ = storebContext.CompletePending(wait: true);
             }
-            Log.ShiftBeginAddress(originalUntilAddress, false);
+            if (shiftBeginAddress)
+                Log.ShiftBeginAddress(originalUntilAddress, false);
             return originalUntilAddress;
         }
 

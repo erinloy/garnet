@@ -437,10 +437,11 @@ namespace Tsavorite.core
         /// <param name="untilAddress">Compact log until this address</param>
         /// <param name="compactionType">Compaction type (whether we lookup records or scan log for liveness checking)</param>
         /// <param name="compactionFunctions">User provided compaction functions (see <see cref="ICompactionFunctions"/>).</param>
+        /// <param name="shiftBeginAddress">Whether compaction shifts BeginAddress to the address it reached (the default). A caller that must order the shift against its own work, such as a checkpoint of another store, passes false and shifts BeginAddress itself to the returned address.</param>
         /// <returns>Address until which compaction was done</returns>
-        public long Compact<CompactionFunctions>(long untilAddress, CompactionType compactionType, CompactionFunctions compactionFunctions)
+        public long Compact<CompactionFunctions>(long untilAddress, CompactionType compactionType, CompactionFunctions compactionFunctions, bool shiftBeginAddress = true)
             where CompactionFunctions : ICompactionFunctions
-            => store.Compact<TInput, TOutput, TContext, CompactionFunctions>(compactionFunctions, untilAddress, compactionType);
+            => store.Compact<TInput, TOutput, TContext, CompactionFunctions>(compactionFunctions, untilAddress, compactionType, shiftBeginAddress);
 
         /// <summary>
         /// Pull iterator for all (distinct) live key-values stored in Tsavorite
