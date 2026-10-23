@@ -30,7 +30,11 @@ namespace Tsavorite.core
 
             if (!TryAllocateRecordReadCache(ref operationState, ref stackCtx, in sizeInfo, out var newLogicalAddress, out var newPhysicalAddress, out _ /*status*/))
                 return false;
-            var newLogRecord = WriteNewRecordInfo(inputLogRecord, readcacheBase, newLogicalAddress, newPhysicalAddress, in sizeInfo, inNewVersion: false, previousAddress: stackCtx.hei.Address);
+            // A tag FindOrCreateTag just made holds kTempInvalidAddress until a record is CAS'd in. Copied into PreviousAddress, that is
+            // ReadCacheEvict's mark of a record outside every chain, so the bucket kept pointing at the record after its page closed and
+            // every reader of the bucket spun (Ziltch router 10-23: ConditionalInsertReadCache caches keys with no main-log record).
+            var previousAddress = stackCtx.hei.Address == kTempInvalidAddress ? kInvalidAddress : stackCtx.hei.Address;
+            var newLogRecord = WriteNewRecordInfo(inputLogRecord, readcacheBase, newLogicalAddress, newPhysicalAddress, in sizeInfo, inNewVersion: false, previousAddress: previousAddress);
 
             stackCtx.SetNewRecord(newLogicalAddress | RecordInfo.kIsReadCacheBitMask);
             _ = newLogRecord.TryCopyFrom(in inputLogRecord, in sizeInfo);
