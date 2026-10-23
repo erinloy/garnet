@@ -74,10 +74,10 @@ namespace Tsavorite.core
                 // so eviction cannot have unlinked/stamped it here: eviction runs as a deferred, epoch-gated drain-list action
                 // (OnPagesClosedWorker) and HeadAddress is published before it is queued, so a walker either waits at the
                 // boundary above or holds an epoch that gates the unlink. Its PreviousAddress is therefore always a live
-                // address (a lower readcache record or the main-log boundary). SkipReadCache relies on this same invariant
-                // without a check.
-                Debug.Assert(recordInfo.PreviousAddress > kTempInvalidAddress,
-                    "readcache record's PreviousAddress was kInvalid/kTempInvalid; eviction must not be observable here under epoch");
+                // address (a lower readcache record or the main-log boundary), or kInvalidAddress when ConditionalInsertReadCache cached a key
+                // with no main-log record. SkipReadCache relies on this same invariant without a check.
+                Debug.Assert(recordInfo.PreviousAddress != kTempInvalidAddress,
+                    "readcache record's PreviousAddress was kTempInvalid; eviction must not be observable here under epoch");
 
                 // Update the leading LatestLogicalAddress to recordInfo.PreviousAddress, and if that is a main log record, break out.
                 stackCtx.recSrc.LatestLogicalAddress = recordInfo.PreviousAddress;
@@ -91,7 +91,7 @@ namespace Tsavorite.core
 
             // We did not find the record in the readcache, so set these to the start of the main log entries, and the caller will call TracebackForKeyMatch
             Debug.Assert(ReferenceEquals(stackCtx.recSrc.AllocatorBase, hlogBase), "Expected recSrc.AllocatorBase == hlogBase");
-            Debug.Assert(stackCtx.recSrc.LatestLogicalAddress > kTempInvalidAddress, "Must have a main-log address after readcache");
+            Debug.Assert(stackCtx.recSrc.LatestLogicalAddress != kTempInvalidAddress, "Must have a main-log address (or none) after readcache");
             stackCtx.recSrc.LogicalAddress = stackCtx.recSrc.LatestLogicalAddress;
             stackCtx.recSrc.PhysicalAddress = 0; // do *not* call hlog.GetPhysicalAddress(); LogicalAddress may be below hlog.HeadAddress. Let the caller decide when to do this.
             return false;
@@ -202,9 +202,11 @@ namespace Tsavorite.core
                 var rcAllocatedSize = logRecord.AllocatedSize;
                 var rcRecordInfo = logRecord.Info;
 
-                // Check PreviousAddress for null to handle the info.IsNull() "partial record at end of page" case as well as readcache CAS failures
-                // (such failed records are not in the hash chain, so we must not process them here). We do process other Invalid records here.
-                if (rcRecordInfo.PreviousAddress <= kTempInvalidAddress)
+                // Skip the info.IsNull() "partial record at end of page" case and readcache CAS failures (marked kTempInvalidAddress: not in the hash
+                // chain, so we must not process them here). We do process other Invalid records here. A record whose PreviousAddress is kInvalidAddress
+                // IS in the chain: ConditionalInsertReadCache caches the answer for a key with no main-log record, and skipping it here left the hash
+                // entry pointing into a closed page, so every reader of the bucket spun in ReadCacheNeedToWaitForEviction forever (Ziltch router, 10-23).
+                if (rcRecordInfo.IsNull || rcRecordInfo.PreviousAddress == kTempInvalidAddress)
                     goto NextRecord;
 
                 // If there are any readcache entries for this key, the hash chain will always be of the form:
