@@ -528,6 +528,34 @@ namespace Tsavorite.core
         public Status ConditionalInsertTombstone(TKey key, long sinceAddress)
             => ConditionalInsertBytes(key, default, tombstone: true, sinceAddress);
 
+        /// <summary>
+        /// F2's read of a cold store: put (<paramref name="key"/>, <paramref name="value"/>) into this store's read cache only if the read cache holds
+        /// no record of the key and this log holds none, live or tombstone, at or above <paramref name="sinceAddress"/> - the TailAddress the caller
+        /// read before its read of this log missed. Never pending, never appended to the log; false when the read cache is off or it did not land.
+        /// A write of the key invalidates the copy as it does any read-cache record.
+        /// </summary>
+        public bool ConditionalInsertReadCache(TKey key, ReadOnlySpan<byte> value, long sinceAddress)
+            => ConditionalInsertReadCacheBytes(key, value, tombstone: false, sinceAddress);
+
+        /// <summary>The same test as <see cref="ConditionalInsertReadCache(TKey, ReadOnlySpan{byte}, long)"/>, caching the key's absence as a read-cache
+        /// tombstone: the next read of the key ends at it, as at a tombstone a device read found.</summary>
+        public bool ConditionalInsertReadCacheTombstone(TKey key, long sinceAddress)
+            => ConditionalInsertReadCacheBytes(key, default, tombstone: true, sinceAddress);
+
+        private bool ConditionalInsertReadCacheBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress)
+        {
+            UnsafeResumeThread();
+            try
+            {
+                return store.ConditionalInsertReadCacheBytes<TKey, TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions,
+                        BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(sessionFunctions, key, value, tombstone, sinceAddress);
+            }
+            finally
+            {
+                UnsafeSuspendThread();
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private Status ConditionalInsertBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress)
         {

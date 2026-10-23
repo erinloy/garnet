@@ -24,34 +24,10 @@ namespace Tsavorite.core
 #endif
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
         {
-            var keyLength = key.KeyBytes.Length;
-            if (keyLength == 0 || keyLength > LogSettings.MaxInlineKeySizeLimit)
-                throw new TsavoriteException($"ConditionalInsert: key length {keyLength} is outside 1..{LogSettings.MaxInlineKeySizeLimit}");
-            if (value.Length > LogSettings.MaxInlineValueSizeLimit)
-                throw new TsavoriteException($"ConditionalInsert: value length {value.Length} exceeds {LogSettings.MaxInlineValueSizeLimit}");
-            if (sinceAddress < 0)
-                throw new TsavoriteException($"ConditionalInsert: sinceAddress {sinceAddress} is not an address");
-
-            // The image is a SOURCE: all inline whatever this store's allocator. The copy sizes its destination again from the image.
-            var sizeInfo = new RecordSizeInfo
-            {
-                FieldInfo = new() { KeySize = keyLength, ValueSize = value.Length, ExtendedNamespaceSize = RecordNamespace.GetExtendedNamespaceSize(in key) }
-            };
-            sizeInfo.SetKeyIsInline();
-            sizeInfo.MaxInlineValueSize = int.MaxValue;
-            sizeInfo.SetValueIsInline();
-            sizeInfo.CalculateSizes(keyLength, value.Length);
-
-            var buffer = hlogBase.bufferPool.Get(sizeInfo.AllocatedInlineRecordSize);
+            var buffer = ConditionalInsertImage(key, value, tombstone, sinceAddress, out _);
             try
             {
                 var image = new LogRecord((long)buffer.GetValidPointer());
-                image.InfoRef = RecordInfo.InitialValid;
-                image.InitializeRecord(key, in sizeInfo);
-                if (!image.TrySetValueSpanAndPrepareOptionals(value, in sizeInfo))
-                    throw new TsavoriteException("ConditionalInsert: the record image did not take its value");
-                if (tombstone)
-                    image.InfoRef.SetTombstone();
 
                 // The record form's bound is exclusive (it is the source's own address); one below an aligned address names no record.
                 var source = new TransientSourceLogRecord(DiskLogRecord.CreateFromTransientLogRecord(in image));
@@ -62,6 +38,44 @@ namespace Tsavorite.core
             {
                 buffer.Return();   // always this call's: a pending operation holds its own copy of the record and of the key
             }
+        }
+
+        // The record image both conditional inserts copy from: a SOURCE, all inline whatever this store's allocator; the copy sizes its destination again.
+        private SectorAlignedMemory ConditionalInsertImage<TKey>(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress, out RecordSizeInfo sizeInfo)
+            where TKey : IKey
+#if NET9_0_OR_GREATER
+                , allows ref struct
+#endif
+        {
+            var keyLength = key.KeyBytes.Length;
+            if (keyLength == 0 || keyLength > LogSettings.MaxInlineKeySizeLimit)
+                throw new TsavoriteException($"ConditionalInsert: key length {keyLength} is outside 1..{LogSettings.MaxInlineKeySizeLimit}");
+            if (value.Length > LogSettings.MaxInlineValueSizeLimit)
+                throw new TsavoriteException($"ConditionalInsert: value length {value.Length} exceeds {LogSettings.MaxInlineValueSizeLimit}");
+            if (sinceAddress < 0)
+                throw new TsavoriteException($"ConditionalInsert: sinceAddress {sinceAddress} is not an address");
+
+            sizeInfo = new RecordSizeInfo
+            {
+                FieldInfo = new() { KeySize = keyLength, ValueSize = value.Length, ExtendedNamespaceSize = RecordNamespace.GetExtendedNamespaceSize(in key) }
+            };
+            sizeInfo.SetKeyIsInline();
+            sizeInfo.MaxInlineValueSize = int.MaxValue;
+            sizeInfo.SetValueIsInline();
+            sizeInfo.CalculateSizes(keyLength, value.Length);
+
+            var buffer = hlogBase.bufferPool.Get(sizeInfo.AllocatedInlineRecordSize);
+            var image = new LogRecord((long)buffer.GetValidPointer());
+            image.InfoRef = RecordInfo.InitialValid;
+            image.InitializeRecord(key, in sizeInfo);
+            if (!image.TrySetValueSpanAndPrepareOptionals(value, in sizeInfo))
+            {
+                buffer.Return();
+                throw new TsavoriteException("ConditionalInsert: the record image did not take its value");
+            }
+            if (tombstone)
+                image.InfoRef.SetTombstone();
+            return buffer;
         }
     }
 }
