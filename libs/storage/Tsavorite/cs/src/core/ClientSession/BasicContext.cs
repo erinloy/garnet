@@ -544,6 +544,12 @@ namespace Tsavorite.core
 
         private bool ConditionalInsertReadCacheBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress)
         {
+            // LightEpoch is not re-entrant: a Resume on a thread that already holds this store's epoch claims a second table slot, the
+            // Suspend frees only that one, and the first stays held at its old epoch for good. No drain action runs again, the read cache's
+            // ClosedUntilAddress stops, and every reader that meets an evicted record spins. A caller continuing inline under an operation
+            // of this store is refused: the insert is best effort.
+            if (store.epoch.ThisInstanceProtected())
+                return store.RefuseReadCacheInsertUnderEpoch();
             UnsafeResumeThread();
             try
             {

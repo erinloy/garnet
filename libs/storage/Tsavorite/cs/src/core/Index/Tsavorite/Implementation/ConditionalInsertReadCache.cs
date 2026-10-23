@@ -91,12 +91,20 @@ namespace Tsavorite.core
             }
         }
 
-        long readCacheInsertsLanded, readCacheInsertsHeld, readCacheInsertsBelowMemory, readCacheInsertsLost;
+        long readCacheInsertsLanded, readCacheInsertsHeld, readCacheInsertsBelowMemory, readCacheInsertsLost, readCacheInsertsUnderEpoch;
+
+        internal bool RefuseReadCacheInsertUnderEpoch()
+        {
+            _ = System.Threading.Interlocked.Increment(ref readCacheInsertsUnderEpoch);
+            return false;
+        }
 
         /// <summary>Conditional read-cache inserts, by what they did: landed; held (the key already had a read-cache copy or a record inside the
-        /// bound); below-memory (the check would have needed IO); lost (a writer moved the hash entry, or the read cache could not allocate).</summary>
-        public (long Landed, long Held, long BelowMemory, long Lost) ConditionalReadCacheInserts =>
+        /// bound); below-memory (the check would have needed IO); lost (a writer moved the hash entry, or the read cache could not allocate);
+        /// under-epoch (refused: the calling thread already held this store's epoch, inside one of its operations).</summary>
+        public (long Landed, long Held, long BelowMemory, long Lost, long UnderEpoch) ConditionalReadCacheInserts =>
             (System.Threading.Interlocked.Read(ref readCacheInsertsLanded), System.Threading.Interlocked.Read(ref readCacheInsertsHeld),
-             System.Threading.Interlocked.Read(ref readCacheInsertsBelowMemory), System.Threading.Interlocked.Read(ref readCacheInsertsLost));
+             System.Threading.Interlocked.Read(ref readCacheInsertsBelowMemory), System.Threading.Interlocked.Read(ref readCacheInsertsLost),
+             System.Threading.Interlocked.Read(ref readCacheInsertsUnderEpoch));
     }
 }
