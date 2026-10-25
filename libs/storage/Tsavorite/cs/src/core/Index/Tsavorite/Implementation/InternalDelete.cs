@@ -280,7 +280,7 @@ namespace Tsavorite.core
             OnDispose(ref newLogRecord, DisposeReason.InitialDeleterCASFailed);
 
             SaveAllocationForRetry(ref operationState, newLogicalAddress, newPhysicalAddress);
-            return OperationStatus.RETRY_NOW;   // CAS failure does not require epoch refresh
+            return RetryAfterLostCas(ref operationState, ref stackCtx);
         }
     }
 }

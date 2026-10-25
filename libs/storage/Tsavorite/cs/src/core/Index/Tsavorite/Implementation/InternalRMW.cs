@@ -693,7 +693,7 @@ namespace Tsavorite.core
             OnDispose(ref newLogRecord, doingCU ? DisposeReason.CopyUpdaterCASFailed : DisposeReason.InitialUpdaterCASFailed);
 
             SaveAllocationForRetry(ref operationState, newLogicalAddress, newPhysicalAddress);
-            return OperationStatus.RETRY_NOW;   // CAS failure does not require epoch refresh
+            return RetryAfterLostCas(ref operationState, ref stackCtx);
         }
 
         internal bool ReinitializeExpiredRecord<TInput, TOutput, TContext, TSessionFunctionsWrapper>(ref LogRecord logRecord, ref TInput input, ref TOutput output, ref RMWInfo rmwInfo,

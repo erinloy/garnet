@@ -3,6 +3,7 @@
 
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using Garnet.test;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -33,10 +34,13 @@ namespace Tsavorite.test
         {
             internal TsavoriteKV<StructStoreFunctions, StructAllocator> Store;
             internal int Pops, Writes;
+            internal bool PopUntilARefresh;   // an eviction in flight: it moves the head on every attempt until an epoch refresh drains it
 
             public override bool InitialWriter(ref LogRecord dstLogRecord, in RecordSizeInfo sizeInfo, ref InputStruct input, ReadOnlySpan<byte> srcValue, ref OutputStruct output, ref UpsertInfo upsertInfo)
             {
                 Writes++;
+                if (Pops > 0 && Writes == 1 && PopUntilARefresh)   // queued from a thread of its own: only this thread's refresh can drain it
+                    Task.Run(() => { Store.epoch.Resume(); try { Store.epoch.BumpCurrentEpoch(() => Pops = 0); } finally { Store.epoch.Suspend(); } }).Wait();
                 if (Pops > 0)
                 {
                     HashEntryInfo hei = new(upsertInfo.KeyHash);
@@ -105,6 +109,40 @@ namespace Tsavorite.test
             OutputStruct output = default;
             ClassicAssert.IsTrue(bContext.Read(key, ref input, ref output).Found, "and the key reads its new value");
             ClassicAssert.AreEqual(9, output.value.vfield1);
+            var lost = store.LostCases;
+            ClassicAssert.AreEqual((readCacheHead ? Failures : 0, 0L, 0L), (lost.Evicted, lost.Promoted, lost.Other), "each pop is named as an eviction: the head moved down its own chain");
+        }
+
+        [Test]
+        [Category("TsavoriteKV")]
+        [Category("ReadCache")]
+        public void An_upsert_that_keeps_losing_its_cas_refreshes_its_epoch_after_the_bound_and_lands()
+        {
+            const int Neighbours = 40;
+            var bContext = session.BasicContext;
+            var value = new ValueStruct { vfield1 = 7, vfield2 = 8 };
+            var key = new KeyStruct { kfield1 = 51, kfield2 = 1 };
+            _ = bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default);
+            store.Log.FlushAndEvict(wait: true);
+            var since = store.Log.TailAddress;
+            for (var i = 0; i < Neighbours; i++)
+            {
+                var neighbour = new KeyStruct { kfield1 = 51, kfield2 = 100 + i };
+                ClassicAssert.IsTrue(bContext.ConditionalInsertReadCache(neighbour, SpanByte.FromPinnedVariable(ref value), since), "CONTROL: the neighbour is cached");
+            }
+
+            var functions = session.functions;
+            (functions.Writes, functions.Pops, functions.PopUntilARefresh) = (0, Neighbours, true);   // Neighbours caps a mover that nothing drains
+            var newValue = new ValueStruct { vfield1 = 9, vfield2 = 10 };
+            _ = bContext.Upsert(key, SpanByte.FromPinnedVariable(ref newValue), Empty.Default);
+
+            var lost = store.LostCases;
+            ClassicAssert.AreEqual(1, lost.PastBound, "the operation reached the bound once and refreshed its epoch");
+            ClassicAssert.LessOrEqual(functions.Writes, 9, $"the refresh drained the mover, so the write after it landed: {functions.Writes} attempts");
+            InputStruct input = default;
+            OutputStruct output = default;
+            ClassicAssert.IsTrue(bContext.Read(key, ref input, ref output).Found);
+            ClassicAssert.AreEqual(9, output.value.vfield1, "and the key reads its new value");
         }
 
         private long TailGrowth(Action write)

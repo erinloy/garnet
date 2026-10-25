@@ -69,6 +69,9 @@ namespace Tsavorite.core
             // For RMW if an allocation caused the source record for a copy to go from readonly to below HeadAddress, or for any operation with CAS failure.
             internal long retryNewLogicalAddress;
 
+            // Lost CASes this operation has retried in a row (TsavoriteKV.CasLossesBeforeRefresh).
+            internal int casLosses;
+
             // Address of the initial entry in the hash chain upon start of Internal(RUMD).
             internal long initialEntryAddress;
 
