@@ -504,6 +504,19 @@ namespace Tsavorite.core
             => InternalRecoverAsync(indexCheckpointToken, hybridLogCheckpointToken, numPagesToPreload, undoNextVersion, cancellationToken);
 
         /// <summary>
+        /// Recover from a fold-over index and log token, replaying the log past the checkpoint's final address to
+        /// <paramref name="replayUntilAddress"/>: an address the caller recorded as flushed (every byte below it was on the device).
+        /// Past final nothing is undone; at or below final this is <see cref="RecoverAsync(Guid, Guid, int, bool, CancellationToken)"/>.
+        /// Never pass an address the log did not flush: the bytes beyond the last flush are not this log's records.
+        /// </summary>
+        /// <returns>Version we actually recovered to</returns>
+        public ValueTask<long> RecoverAsync(Guid indexCheckpointToken, Guid hybridLogCheckpointToken, long replayUntilAddress, CancellationToken cancellationToken = default)
+            => InternalRecoverAsync(indexCheckpointToken, hybridLogCheckpointToken, -1, true, cancellationToken, replayUntilAddress);
+
+        /// <summary>Bytes the last recovery replayed past its checkpoint's final address (0 when it stopped at final).</summary>
+        public long LastReplayedPastFinal { get; private set; }
+
+        /// <summary>
         /// Wait for ongoing checkpoint to complete
         /// </summary>
         /// <returns></returns>

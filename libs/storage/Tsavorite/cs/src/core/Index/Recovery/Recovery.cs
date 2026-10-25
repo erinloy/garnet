@@ -434,16 +434,28 @@ namespace Tsavorite.core
         }
 
         /// <summary>Aynchronous recovery driver</summary>
-        private ValueTask<long> InternalRecoverAsync(Guid indexToken, Guid hybridLogToken, int numPagesToPreload, bool undoNextVersion, CancellationToken cancellationToken)
+        private ValueTask<long> InternalRecoverAsync(Guid indexToken, Guid hybridLogToken, int numPagesToPreload, bool undoNextVersion, CancellationToken cancellationToken,
+            long replayUntilAddress = 0)
         {
             GetRecoveryInfo(indexToken, hybridLogToken, out var recoveredHLCInfo, out var recoveredICInfo);
-            return InternalRecoverAsync(recoveredICInfo, recoveredHLCInfo, numPagesToPreload, undoNextVersion, cancellationToken);
+            return InternalRecoverAsync(recoveredICInfo, recoveredHLCInfo, numPagesToPreload, undoNextVersion, cancellationToken, replayUntilAddress);
         }
 
         /// <summary>Asynchronous recovery driver</summary>
-        private async ValueTask<long> InternalRecoverAsync(IndexCheckpointInfo recoveredICInfo, HybridLogCheckpointInfo recoveredHLCInfo, int numPagesToPreload, bool undoNextVersion, CancellationToken cancellationToken)
+        private async ValueTask<long> InternalRecoverAsync(IndexCheckpointInfo recoveredICInfo, HybridLogCheckpointInfo recoveredHLCInfo, int numPagesToPreload, bool undoNextVersion, CancellationToken cancellationToken,
+            long replayUntilAddress = 0)
         {
             hlogBase.VerifyRecoveryInfo(recoveredHLCInfo, false);
+
+            // Past a fold-over checkpoint's final address, to a flushed-until mark: the cut is then the flushed prefix, whose next-version
+            // records below final are part of it (a later one may have read them), so nothing is undone.
+            var untilAddress = recoveredHLCInfo.info.finalLogicalAddress;
+            if (recoveredHLCInfo.info.useSnapshotFile == 0 && replayUntilAddress > untilAddress)
+            {
+                untilAddress = replayUntilAddress;
+                undoNextVersion = false;
+            }
+            LastReplayedPastFinal = untilAddress - recoveredHLCInfo.info.finalLogicalAddress;
 
             if (hlogBase.GetTailAddress() > hlogBase.GetFirstValidLogicalAddressOnPage(0))
             {
@@ -456,7 +468,7 @@ namespace Tsavorite.core
             {
                 await RecoverFuzzyIndexAsync(recoveredICInfo, cancellationToken).ConfigureAwait(false);
                 var scrubClock = System.Diagnostics.Stopwatch.StartNew();
-                var scrubbed = ScrubEntriesAtOrBeyond(recoveredHLCInfo.info.finalLogicalAddress);
+                var scrubbed = ScrubEntriesAtOrBeyond(untilAddress);
                 LastScrubMs = scrubClock.ElapsedMilliseconds;
                 recoveryScrubbedEntries = scrubbed;
                 if (scrubbed > 0)
@@ -468,7 +480,7 @@ namespace Tsavorite.core
                         string.Join(", ", System.Linq.Enumerable.Select(LastMisalignedEntries, n => $"bucket {n.Bucket} tag {n.Tag} -> {LogAddress.AddressString(n.Address)}")));
             }
 
-            if (!SetRecoveryPageRanges(recoveredHLCInfo, numPagesToPreload, recoverFromAddress, out long tailAddress, out long headAddress, out long scanFromAddress))
+            if (!SetRecoveryPageRanges(recoveredHLCInfo, untilAddress, numPagesToPreload, recoverFromAddress, out long tailAddress, out long headAddress, out long scanFromAddress))
                 return -1;
             RecoveryOptions options = new(fuzzyRegionStartAddress: recoveredHLCInfo.info.startLogicalAddress, undoNextVersion);
             var indexMs = phase.ElapsedMilliseconds;
@@ -480,7 +492,7 @@ namespace Tsavorite.core
             RecoveryStatus recoveryStatus;
             if (recoveredHLCInfo.info.useSnapshotFile == 0)
             {
-                recoveryStatus = await RecoverHybridLogAsync(scanFromAddress, recoverFromAddress, untilAddress: recoveredHLCInfo.info.finalLogicalAddress,
+                recoveryStatus = await RecoverHybridLogAsync(scanFromAddress, recoverFromAddress, untilAddress: untilAddress,
                         recoveredHLCInfo.info.nextVersion, CheckpointType.FoldOver, headAddress, options, cancellationToken).ConfigureAwait(false);
 
                 // FoldOver objects are already durable in the main object-log; set the tail to its end so subsequent writes append after it.
@@ -518,7 +530,7 @@ namespace Tsavorite.core
             var replayMs = phase.ElapsedMilliseconds;
             phase.Restart();
             DoPostRecovery(recoveredICInfo, recoveredHLCInfo, tailAddress, finalHeadAddress, readOnlyAddress);
-            LastRecoveryPhases = new(indexMs, replayMs, recoveredHLCInfo.info.finalLogicalAddress - recoverFromAddress, phase.ElapsedMilliseconds);
+            LastRecoveryPhases = new(indexMs, replayMs, untilAddress - recoverFromAddress, phase.ElapsedMilliseconds);
             return recoveredHLCInfo.info.version;
         }
 
@@ -609,15 +621,15 @@ namespace Tsavorite.core
             return true;
         }
 
-        private bool SetRecoveryPageRanges(HybridLogCheckpointInfo recoveredHLCInfo, int numPagesToPreload, long recoverFromAddress, out long tailAddress, out long headAddress, out long scanFromAddress)
+        private bool SetRecoveryPageRanges(HybridLogCheckpointInfo recoveredHLCInfo, long untilAddress, int numPagesToPreload, long recoverFromAddress, out long tailAddress, out long headAddress, out long scanFromAddress)
         {
-            if ((recoveredHLCInfo.info.useSnapshotFile == 0) && (recoveredHLCInfo.info.finalLogicalAddress <= hlogBase.GetTailAddress()))
+            if ((recoveredHLCInfo.info.useSnapshotFile == 0) && (untilAddress <= hlogBase.GetTailAddress()))
             {
                 tailAddress = headAddress = scanFromAddress = default;
                 return false;
             }
 
-            tailAddress = recoveredHLCInfo.info.finalLogicalAddress;
+            tailAddress = untilAddress;
             headAddress = recoveredHLCInfo.info.headAddress;
             if (numPagesToPreload != -1)
             {
