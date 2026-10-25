@@ -223,6 +223,9 @@ namespace Tsavorite.core
 
         /// <summary>Sector size</summary>
         protected readonly int sectorSize;
+
+        /// <summary>The scan frames' slot buffers, handed from a disposed scan to the next (see <see cref="FrameSlotPool"/>).</summary>
+        internal readonly FrameSlotPool ScanFramePool;
         #endregion
 
         #region Private page metadata
@@ -740,6 +743,7 @@ namespace Tsavorite.core
                 throw new TsavoriteException($"Page size must be at least of device sector size ({sectorSize} bytes). Set PageSizeBits accordingly.");
 
             AlignedPageSizeBytes = RoundUp(PageSize, sectorSize);
+            ScanFramePool = new FrameSlotPool(PageSize, sectorSize);
 
             if (BufferSize > 0)
             {

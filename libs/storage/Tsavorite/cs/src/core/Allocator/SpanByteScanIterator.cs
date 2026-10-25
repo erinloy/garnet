@@ -49,7 +49,7 @@ namespace Tsavorite.core
             this.hlogBase = hlogBase;
             this.assumeInMemory = assumeInMemory;
             if (frameSize > 0)
-                frame = new BlittableFrame(frameSize, hlogBase.PageSize, hlogBase.GetDeviceSectorSize());
+                frame = new BlittableFrame(frameSize, hlogBase.PageSize, hlogBase.GetDeviceSectorSize(), hlogBase.ScanFramePool);
         }
 
         /// <summary>
@@ -64,7 +64,7 @@ namespace Tsavorite.core
             this.hlogBase = hlogBase;
             assumeInMemory = false;
             if (frameSize > 0)
-                frame = new BlittableFrame(frameSize, hlogBase.PageSize, hlogBase.GetDeviceSectorSize());
+                frame = new BlittableFrame(frameSize, hlogBase.PageSize, hlogBase.GetDeviceSectorSize(), hlogBase.ScanFramePool);
         }
 
         #region TODO Unify with ObjectScanIterator
