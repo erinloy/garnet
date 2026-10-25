@@ -211,29 +211,7 @@ namespace Tsavorite.core
                     {
                         Debug.Assert(loadCompletionEvents[nextFrame] is null || loadCompletionEvents[nextFrame].IsSet,
                             $"i {i}, currentAddress {currentIterationAddress}, currentFrame {currentFrame}, nextFrame {nextFrame} overwriting unset completion event");
-                        var readBuffer = objectReadBuffers is not null ? objectReadBuffers[nextFrame] : default;
-
-                        var frameIndex = i;
-                        _ = Interlocked.Increment(ref pendingDrainCallbacks);
-                        if (epoch != null)
-                            epoch.BumpCurrentEpoch(() => DoReadPage(frameIndex));
-                        else
-                            DoReadPage(frameIndex);
-
-                        void DoReadPage(int frameIndex)
-                        {
-                            try
-                            {
-                                AsyncReadPageFromDeviceToFrame(readBuffer, readPage: frameIndex + allocator.GetPageOfAddress(currentIterationAddress, logPageSizeBits), untilAddress: endIterationAddress,
-                                    context: Empty.Default, out loadCompletionEvents[nextFrame], devicePageOffset: 0, device: null, objectLogDevice: null, loadCTSs[nextFrame]);
-                            }
-                            catch
-                            {
-                                _ = Interlocked.Decrement(ref pendingDrainCallbacks);
-                                throw;
-                            }
-                            loadedPages[nextFrame] = pageEndAddress;
-                        }
+                        IssueFrameLoad(i, nextFrame, pageEndAddress, currentIterationAddress, endIterationAddress);
                     }
                     else
                     {
@@ -247,6 +225,34 @@ namespace Tsavorite.core
             // in which case it will come in here as currentFrame, see that nextLoadedPage is already set, and then this line will wait for it.
             // WaitForFrameLoad returns immediately if the wait has already been satisfied.
             return WaitForFrameLoad(currentIterationAddress, currentFrame);
+        }
+
+        /// <summary>Issue one frame's page read. Its own method so the epoch bump's closure is made only when a load is issued: inside
+        /// <see cref="BufferAndLoad"/> it was made for every frame slot of every call, and that is every record read below head.</summary>
+        private void IssueFrameLoad(int frameIndex, long nextFrame, long pageEndAddress, long currentIterationAddress, long endIterationAddress)
+        {
+            var readBuffer = objectReadBuffers is not null ? objectReadBuffers[nextFrame] : default;
+
+            _ = Interlocked.Increment(ref pendingDrainCallbacks);
+            if (epoch != null)
+                epoch.BumpCurrentEpoch(() => DoReadPage(frameIndex));
+            else
+                DoReadPage(frameIndex);
+
+            void DoReadPage(int frameIndex)
+            {
+                try
+                {
+                    AsyncReadPageFromDeviceToFrame(readBuffer, readPage: frameIndex + allocator.GetPageOfAddress(currentIterationAddress, logPageSizeBits), untilAddress: endIterationAddress,
+                        context: Empty.Default, out loadCompletionEvents[nextFrame], devicePageOffset: 0, device: null, objectLogDevice: null, loadCTSs[nextFrame]);
+                }
+                catch
+                {
+                    _ = Interlocked.Decrement(ref pendingDrainCallbacks);
+                    throw;
+                }
+                loadedPages[nextFrame] = pageEndAddress;
+            }
         }
 
         /// <summary>
