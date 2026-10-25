@@ -56,9 +56,11 @@ namespace Tsavorite.core
             // MinRevivAddress is also needed for operationState-based record reuse.
             var minRevivAddress = GetMinRevivifiableAddress();
 
-            // If are eliding the first record in the tag chain, then there can be no others; we are removing the only record in the chain. Otherwise, the new record must be above hei.Address.
-            if ((minRevivAddress <= stackCtx.hei.Address) && (!options.elideSourceRecord || stackCtx.hei.Address != stackCtx.recSrc.LogicalAddress))
-                minRevivAddress = stackCtx.hei.Address;
+            // If are eliding the first record in the tag chain, then there can be no others; we are removing the only record in the chain. Otherwise, the new record must be above
+            // the chain's first main-log record. A read-cache head's address carries the read-cache bit, above every log address: bounding by it, no retry ever reused its allocation.
+            var chainHead = stackCtx.hei.IsReadCache ? stackCtx.recSrc.LatestLogicalAddress : stackCtx.hei.Address;
+            if ((minRevivAddress <= chainHead) && (!options.elideSourceRecord || chainHead != stackCtx.recSrc.LogicalAddress))
+                minRevivAddress = chainHead;
 
             if (options.recycle && operationState.retryNewLogicalAddress != kInvalidAddress
                     && GetAllocationForRetry(sessionFunctions, ref operationState, minRevivAddress, in sizeInfo, out newLogicalAddress, out newPhysicalAddress))
