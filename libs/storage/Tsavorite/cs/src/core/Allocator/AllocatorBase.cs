@@ -2634,8 +2634,13 @@ namespace Tsavorite.core
                 {
                     _wrapper.OnDisposeDiskRecord(ref ctx.diskLogRecord, DisposeReason.DeserializedFromDisk);
                     ctx.DisposeRecord();
-                    // Re-issue this same op (a reference), repopulating its read buffer; all fields propagate.
-                    AsyncGetFromDisk(ctx.logicalAddress, prevLengthToRead, ctx);
+                    // Re-issue this same op (a reference), repopulating its read buffer; all fields propagate. NOT through
+                    // AsyncGetFromDisk's throttle: the read that just completed already left the device's in-flight count, so
+                    // this one only takes back its place, and the thread here is a protected run thread (often a pool worker
+                    // in CompletePendingAsync) that would spin until the device drained. On Windows the completions that drain
+                    // it run on pool workers, so a storm of chain reads spun every worker and no completion ran (Ziltch broker
+                    // 10-26: 20-32 workers in this spin, door dark ~17 min after start).
+                    AsyncReadRecordToMemory(ctx.logicalAddress, prevLengthToRead, asyncGetFromDiskCallbackDelegate, ref ctx);
                     return false;
                 }
             }
