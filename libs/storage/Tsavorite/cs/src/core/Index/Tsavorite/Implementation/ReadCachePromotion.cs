@@ -30,7 +30,15 @@ namespace Tsavorite.core
                 return;
             }
             // Still in the chain until its page closes; eviction unlinks Invalid records as it does valid ones, and readers skip it.
-            LogRecord.GetInfoRef(oldCopy).SetInvalid();
+            // Not when clearing Valid would zero the RecordInfo: a copy cached for a key with no log record ends its chain at
+            // kInvalidAddress (0), and ReadCacheEvict reads a zero RecordInfo as a page's padding (8 bytes long), so the copy was
+            // never unlinked and every reader of the bucket spun on its closed page (Ziltch broker 10-26 15:20Z, 41 threads). It
+            // stays Valid behind the new copy, which every reader of its key meets first; a write detaches the whole prefix.
+            ref var oldInfo = ref LogRecord.GetInfoRef(oldCopy);
+            var invalidated = oldInfo;
+            invalidated.SetInvalid();
+            if (!invalidated.IsNull)
+                oldInfo.SetInvalid();
             _ = Interlocked.Increment(ref readCachePromotions);
         }
 
