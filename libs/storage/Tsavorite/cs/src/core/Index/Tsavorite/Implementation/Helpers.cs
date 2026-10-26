@@ -192,7 +192,9 @@ namespace Tsavorite.core
             // (We no longer need to guard the read-cache prefix boundary here: with the latch-free design nothing
             // consumes the boundary after FindInReadCache - the update detaches and the promotion head-inserts via the
             // hash-entry CAS, which itself fails if the prefix was concurrently evicted and the head changed.)
-            return !(stackCtx.recSrc.HasInMemorySrc && stackCtx.recSrc.LogicalAddress < stackCtx.recSrc.AllocatorBase.HeadAddress);
+            // A read-cache source's address carries the read-cache bit, so it compared above every HeadAddress and an allocation that
+            // recycled its page went on to copy the recycled frame (a promoted hit read a reused page's header as the key's).
+            return !(stackCtx.recSrc.HasInMemorySrc && AbsoluteAddress(stackCtx.recSrc.LogicalAddress) < stackCtx.recSrc.AllocatorBase.HeadAddress);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
