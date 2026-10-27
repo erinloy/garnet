@@ -135,8 +135,8 @@ namespace Tsavorite.core
             if (operationStatus == OperationStatus.ALLOCATE_FAILED)
             {
                 Debug.Assert(!operationState.flushEvent.IsDefault(), "Expected flushEvent for ALLOCATE_FAILED");
-                Debug.Fail("Should have handled ALLOCATE_FAILED before HandleOperationStatus");
-                return new(StatusCode.Pending);
+                // Pending with no IO issued leaves the op in no queue: its caller waits on a completion that never comes.
+                throw new TsavoriteException($"{nameof(OperationStatus.ALLOCATE_FAILED)} reached {nameof(HandleOperationStatus)} unhandled: the caller retries it; it is never Pending with no IO.");
             }
             else if (operationStatus == OperationStatus.RECORD_ON_DISK)
             {
@@ -187,8 +187,9 @@ namespace Tsavorite.core
             }
             else
             {
-                Debug.Fail($"Unexpected OperationStatus {operationStatus}");
-                return new(StatusCode.Error);
+                // A Debug.Assert is no Release guard: an unhandled status completed the op as Error with no output and no callback, which a
+                // reader of the pending completions takes for an absent key (CPR_SHIFT_DETECTED in the pending drain did, 10-27).
+                throw new TsavoriteException($"OperationStatus {operationStatus} reached {nameof(HandleOperationStatus)} unhandled; the operation is refused by name, not completed as Error with no output.");
             }
         }
 

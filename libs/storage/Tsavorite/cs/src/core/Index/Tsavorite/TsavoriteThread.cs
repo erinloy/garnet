@@ -176,14 +176,24 @@ namespace Tsavorite.core
             if (request.diskLogRecord.IsSet && !pendingState.IsConditionalOp)
                 pendingState.TransferFrom(ref request.diskLogRecord, hlogBase.bufferPool);
 
-            var internalStatus = pendingState.type switch
+            OperationStatus internalStatus;
+            while (true)
             {
-                OperationType.READ => ContinuePendingRead(request, ref operationState, ref pendingState, sessionFunctions),
-                OperationType.RMW => ContinuePendingRMW(request, ref operationState, ref pendingState, sessionFunctions),
-                OperationType.CONDITIONAL_INSERT => ContinuePendingConditionalCopyToTail(request, ref operationState, ref pendingState, sessionFunctions),
-                OperationType.CONDITIONAL_SCAN_PUSH => ContinuePendingConditionalScanPush(request, ref operationState, ref pendingState, sessionFunctions),
-                _ => throw new TsavoriteException("Unexpected OperationType")
-            };
+                internalStatus = pendingState.type switch
+                {
+                    OperationType.READ => ContinuePendingRead(request, ref operationState, ref pendingState, sessionFunctions),
+                    OperationType.RMW => ContinuePendingRMW(request, ref operationState, ref pendingState, sessionFunctions),
+                    OperationType.CONDITIONAL_INSERT => ContinuePendingConditionalCopyToTail(request, ref operationState, ref pendingState, sessionFunctions),
+                    OperationType.CONDITIONAL_SCAN_PUSH => ContinuePendingConditionalScanPush(request, ref operationState, ref pendingState, sessionFunctions),
+                    _ => throw new TsavoriteException("Unexpected OperationType")
+                };
+                // A session still in v's PREPARE that meets a v+1 record moves to v+1 and continues, as the immediate path does. Handed on,
+                // HandleOperationStatus only asserted it was handled, and a Release build completed the op as Error with no output.
+                if (internalStatus != OperationStatus.CPR_SHIFT_DETECTED)
+                    break;
+                PendingCprShiftRetries.Record();
+                SynchronizeEpoch(sessionFunctions.Ctx, ref operationState, sessionFunctions);
+            }
 
             var status = HandleOperationStatus(sessionFunctions.Ctx, ref operationState, internalStatus, out newRequest);
 
