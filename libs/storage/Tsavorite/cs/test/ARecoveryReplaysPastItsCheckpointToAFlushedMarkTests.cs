@@ -3,6 +3,7 @@
 
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Garnet.test;
 using NUnit.Framework;
@@ -137,17 +138,20 @@ namespace Tsavorite.test
                 Upsert(store, 0, Before, 1);   // J reads 1 at version v
 
                 // J is written again in the checkpoint's next version, while the checkpoint is in flight: below its final address.
+                // The checkpoint is held at the edge of IN_PROGRESS until J is written, so the write always lands in that window.
                 using (var session = store.NewSession<KeyStruct, InputStruct, OutputStruct, Empty, Functions>(new Functions()))
                 {
                     var bContext = session.BasicContext;
+                    using var jWritten = new ManualResetEventSlim();
+                    store.stateMachineDriver.UnsafeRegisterCallback(new HoldPast(Phase.IN_PROGRESS, jWritten));
                     var checkpoint = CheckpointAsync(store);
                     var wroteJ = false;
-                    for (var spin = 0; !checkpoint.IsCompleted && spin < 100_000; spin++)
+                    for (var spin = 0; !checkpoint.IsCompleted && !wroteJ && spin < 1_000_000; spin++)
                     {
-                        bContext.Refresh();
-                        if (!wroteJ && session.ctx.phase == Phase.IN_PROGRESS) { Upsert(bContext, J, 2); wroteJ = true; }
-                        await Task.Yield();
+                        if (store.stateMachineDriver.SystemState.Phase == Phase.IN_PROGRESS) { Upsert(bContext, J, 2); wroteJ = session.ctx.phase == Phase.IN_PROGRESS; jWritten.Set(); }
+                        else await Task.Yield();
                     }
+                    jWritten.Set();
                     tokens = await checkpoint;
                     ClassicAssert.IsTrue(wroteJ, "control: J was written while the checkpoint was in its next version");
                 }
@@ -164,6 +168,17 @@ namespace Tsavorite.test
                 _ = await store.RecoverAsync(tokens.Index, tokens.Log, mark);
                 ClassicAssert.AreEqual(102, Read(store, K), "K, past final, comes back");
                 ClassicAssert.AreEqual(2, Read(store, J), "J, the next-version write K read, comes back with it, not undone to its version-v value");
+            }
+        }
+
+        /// <summary>Holds the driver before it leaves <paramref name="phase"/> until the test has done its write in it (bounded).</summary>
+        private sealed class HoldPast(Phase phase, ManualResetEventSlim done) : IStateMachineCallback
+        {
+            private bool _inPhase;
+            public void BeforeEnteringState(SystemState next)
+            {
+                if (_inPhase) { _inPhase = false; _ = done.Wait(TimeSpan.FromSeconds(30)); }
+                if (next.Phase == phase) _inPhase = true;
             }
         }
     }
