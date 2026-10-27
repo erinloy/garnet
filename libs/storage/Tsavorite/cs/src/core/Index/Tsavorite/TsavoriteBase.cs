@@ -93,6 +93,7 @@ namespace Tsavorite.core
         {
             if (isEpochOwned)
                 epoch.Dispose();
+            UnlockIndexResident();
             overflowBucketsAllocator.Dispose();
             overflowBucketsAllocatorResize?.Dispose();
 

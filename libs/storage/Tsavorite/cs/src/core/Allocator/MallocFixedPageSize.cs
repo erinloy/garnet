@@ -254,6 +254,14 @@ namespace Tsavorite.core
         /// </summary>
         public void Dispose() => count = 0;
 
+        /// <summary>Every allocated page's aligned start and byte length (blittable values only): what an index lock holds resident.</summary>
+        internal void ForEachPage(Action<IntPtr, nint> page)
+        {
+            if (!IsBlittable) return;
+            for (var i = 0; i < LevelSize && values[i] is not null; i++)
+                page(pointers[i], (nint)PageSize * RecordSize);
+        }
+
 
         #region Checkpoint
 

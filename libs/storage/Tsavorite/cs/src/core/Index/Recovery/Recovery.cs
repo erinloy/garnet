@@ -467,6 +467,8 @@ namespace Tsavorite.core
             if (!GetInitialRecoveryAddress(recoveredICInfo, recoveredHLCInfo, out long recoverFromAddress))
             {
                 await RecoverFuzzyIndexAsync(recoveredICInfo, cancellationToken).ConfigureAwait(false);
+                if (LockIndexResidentAtRecovery)
+                    _ = LockIndexResident();   // before the bucket pass: a trimmed table makes that pass a hard fault per page
                 var scrubClock = System.Diagnostics.Stopwatch.StartNew();
                 var scrubbed = ScrubEntriesAtOrBeyond(untilAddress);
                 LastScrubMs = scrubClock.ElapsedMilliseconds;
