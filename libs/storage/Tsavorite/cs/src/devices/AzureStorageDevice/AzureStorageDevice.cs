@@ -647,8 +647,10 @@ namespace Tsavorite.devices
                 {
                     var length = Math.Min(readLength, MAX_DOWNLOAD_SIZE);
 
+                    // the read's turn: a walk's takes the walk lane first, so a request never queues behind more than half the turns (BlobReadLanes)
+                    using var turn = await BlobReadLanes.TakeAsync(token).ConfigureAwait(false);
                     await BlobManager.PerformWithRetriesAsync(
-                        BlobManager.AsynchronousStorageReadMaxConcurrency,
+                        null,
                         true,
                         "PageBlobClient.DownloadStreamingAsync",
                         "ReadFromDevice",

@@ -39,11 +39,10 @@ namespace Tsavorite.devices
         /// </summary>
         public IStorageErrorHandler StorageErrorHandler { get; private set; }
 
-        static readonly SemaphoreSlim AsynchronousStorageReadMaxConcurrencyStatic = new(Math.Min(100, Environment.ProcessorCount * 10));
         static readonly SemaphoreSlim AsynchronousStorageWriteMaxConcurrencyStatic = new(Math.Min(50, Environment.ProcessorCount * 7));
 
         /// <inheritdoc />
-        public SemaphoreSlim AsynchronousStorageReadMaxConcurrency => AsynchronousStorageReadMaxConcurrencyStatic;
+        public SemaphoreSlim AsynchronousStorageReadMaxConcurrency => BlobReadLanes.Shared;
 
         /// <inheritdoc />
         public SemaphoreSlim AsynchronousStorageWriteMaxConcurrency => AsynchronousStorageWriteMaxConcurrencyStatic;
