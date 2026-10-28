@@ -39,7 +39,20 @@ namespace Tsavorite.core
         public static long Bytes = 32L << 20;
 
         internal static int Frames(int logPageSizeBits) => (int)Math.Clamp(Bytes >> logPageSizeBits, 2, 256);
+
+        /// <summary>Bytes of frame slots one log's scans hold at once, the most its pool ever makes; a scan past it takes what is left
+        /// (two at least, a double-buffered scan) or waits for two. The pinned heap never compacts, so slots made past a bound and
+        /// dropped stay committed as holes.</summary>
+        public static long BudgetBytes = 64L << 20;
+
+        /// <summary>How long a scan past the budget waits for two frames before it takes them past it, counted: a scan opened in
+        /// another's sink would otherwise wait on itself.</summary>
+        public static TimeSpan BudgetWait = TimeSpan.FromSeconds(10);
     }
+
+    /// <summary>A log's scan frames against its budget: what its scans may hold at once, hold now, the slots kept for the next scan,
+    /// the slots ever made, and how often a scan was trimmed to what was left, waited for it, or went past it.</summary>
+    public readonly record struct ScanFrameCounts(int Budget, int Held, int Kept, long Made, long Trimmed, long Waited, long PastBudget);
 
     /// <summary>
     /// Scan buffering mode for in-memory records, e.g. for copying and holding a record for Pull iterators

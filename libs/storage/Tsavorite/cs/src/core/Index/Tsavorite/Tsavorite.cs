@@ -56,6 +56,9 @@ namespace Tsavorite.core
         /// </summary>
         public long HighWaterAllocatedPageCount => hlogBase.HighWaterAllocatedPageCount;
 
+        /// <summary>The log's scan frames against their budget (<see cref="ScanReadAhead.BudgetBytes"/>).</summary>
+        public ScanFrameCounts ScanFrames => hlogBase.ScanFramePool.Counts;
+
         /// <summary>
         /// Size of index in #cache lines (64 bytes each)
         /// </summary>

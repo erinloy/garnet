@@ -35,7 +35,7 @@ namespace Tsavorite.core
         internal unsafe TsavoriteLogScanIterator(TsavoriteLog tsavoriteLog, TsavoriteLogAllocatorImpl hlog, long beginAddress, long endAddress,
                 GetMemory getMemory, DiskScanBufferingMode diskScanBufferingMode, LightEpoch epoch, int headerSize, bool scanUncommitted = false, ILogger logger = null)
             : base(beginAddress == 0 ? hlog.GetFirstValidLogicalAddressOnPage(0) : beginAddress, endAddress,
-                diskScanBufferingMode, InMemoryScanBufferingMode.NoBuffering, includeClosedRecords: false, epoch, hlog.LogPageSizeBits, hlog._wrapper, logger: logger)
+                diskScanBufferingMode, InMemoryScanBufferingMode.NoBuffering, includeClosedRecords: false, epoch, hlog.LogPageSizeBits, hlog._wrapper, initForReads: true, logger, hlog.ScanFramePool)
         {
             this.tsavoriteLog = tsavoriteLog;
             allocator = hlog;
@@ -43,7 +43,7 @@ namespace Tsavorite.core
             this.headerSize = headerSize;
             this.scanUncommitted = scanUncommitted;
             if (frameSize > 0)
-                frame = new BlittableFrame(frameSize, hlog.PageSize, hlog.GetDeviceSectorSize());
+                frame = new BlittableFrame(frameSize, hlog.PageSize, hlog.GetDeviceSectorSize(), hlog.ScanFramePool);
         }
 
         /// <summary>

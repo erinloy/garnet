@@ -73,6 +73,9 @@ namespace Tsavorite.core
         /// </summary>
         public long TailAddress => allocator.GetTailAddress();
 
+        /// <summary>The log's scan frames against their budget (<see cref="ScanReadAhead.BudgetBytes"/>).</summary>
+        public ScanFrameCounts ScanFrames => allocator.ScanFramePool.Counts;
+
         /// <summary>
         /// Log flushed until address
         /// </summary>

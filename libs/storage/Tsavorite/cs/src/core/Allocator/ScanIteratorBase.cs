@@ -104,6 +104,14 @@ namespace Tsavorite.core
         /// </summary>
         public unsafe ScanIteratorBase(long beginAddress, long endAddress, DiskScanBufferingMode diskScanBufferingMode, InMemoryScanBufferingMode memScanBufferingMode,
                 bool includeClosedRecords, LightEpoch epoch, int logPageSizeBits, TAllocatorWrapper allocator, bool initForReads = true, ILogger logger = null)
+            : this(beginAddress, endAddress, diskScanBufferingMode, memScanBufferingMode, includeClosedRecords, epoch, logPageSizeBits, allocator, initForReads, logger, framePool: null)
+        {
+        }
+
+        /// <summary>Constructor whose frames come from <paramref name="framePool"/>'s budget: the frame the derived iterator builds over
+        /// that pool owns the reservation and hands it back on Dispose.</summary>
+        internal unsafe ScanIteratorBase(long beginAddress, long endAddress, DiskScanBufferingMode diskScanBufferingMode, InMemoryScanBufferingMode memScanBufferingMode,
+                bool includeClosedRecords, LightEpoch epoch, int logPageSizeBits, TAllocatorWrapper allocator, bool initForReads, ILogger logger, FrameSlotPool framePool)
         {
             this.logger = logger;
             this.memScanBufferingMode = memScanBufferingMode;
@@ -132,6 +140,8 @@ namespace Tsavorite.core
                 frameSize = 0;
                 return;
             }
+            if (framePool is not null)
+                frameSize = framePool.Reserve(frameSize, mayWait: epoch is null || !epoch.ThisInstanceProtected());
             if (initForReads)
                 InitializeForReads();
         }
