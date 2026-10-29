@@ -105,6 +105,49 @@ namespace Tsavorite.test
                 : "CONTROL: a live chain is walked once, from the copy");
         }
 
+        [Test]
+        [Category("TsavoriteKV")]
+        [Category("ReadCache")]
+        [Category("CheckpointRestore")]
+        public void A_copied_cached_absence_whose_slot_another_key_reclaimed_never_takes_that_key_s_word()
+        {
+            var bContext = session.BasicContext;
+            var key = new KeyStruct { kfield1 = 7, kfield2 = 1 };
+            var value = new ValueStruct { vfield1 = 7, vfield2 = 8 };
+            ClassicAssert.IsTrue(bContext.ConditionalInsertReadCache(key, SpanByte.FromPinnedVariable(ref value), store.Log.TailAddress), "CONTROL: an answer for a key with no log record is cached");
+            HashEntryInfo hei = new(store.storeFunctions.GetKeyHashCode64(key));
+            ClassicAssert.IsTrue(store.FindTag(ref hei) && hei.IsReadCache, "CONTROL: a read-cache record heads the key's chain");
+            var cached = LogAddress.AbsoluteAddress(hei.Address);
+            HashBucket copy = *hei.bucket;
+
+            var neighbour = 1000;
+            while (store.readcacheBase.ClosedUntilAddress <= cached)
+                Cache(neighbour++);
+            HashBucketEntry live = default;
+            live.word = hei.bucket->bucket_entries[hei.slot];
+            ClassicAssert.AreEqual(LogAddress.kInvalidAddress, live.Address, "CONTROL: the close left the key's slot at address 0, below begin");
+
+            var other = 2000;
+            for (HashEntryInfo o = new(store.storeFunctions.GetKeyHashCode64(Other(other))); ; o = new(store.storeFunctions.GetKeyHashCode64(Other(++other))))
+                if (!store.FindTag(ref o) && o.bucketIndex == hei.bucketIndex && o.tag != hei.tag)
+                    break;
+            var otherKey = Other(other);
+            var otherValue = new ValueStruct { vfield1 = other, vfield2 = 0 };
+            _ = bContext.Upsert(otherKey, SpanByte.FromPinnedVariable(ref otherValue), Empty.Default);
+            live.word = hei.bucket->bucket_entries[hei.slot];
+            ClassicAssert.AreNotEqual(hei.tag, live.Tag, "CONTROL: another key reclaimed the slot");
+
+            var before = store.CheckpointRewalkTagMoved;
+            store.epoch.Resume();
+            try { store.SkipReadCacheBucket(&copy, hei.bucket); }
+            finally { store.epoch.Suspend(); }
+
+            ClassicAssert.AreEqual(0L, copy.bucket_entries[hei.slot], "the copied slot is emptied: its key had no record, and the reclaiming key's word is not the copied key's");
+            ClassicAssert.AreEqual(1, store.CheckpointRewalkTagMoved - before, "the moved tag is counted");
+        }
+
+        private static KeyStruct Other(int kfield1) => new() { kfield1 = kfield1, kfield2 = 2 };
+
         private void Cache(int kfield1)
         {
             var key = new KeyStruct { kfield1 = kfield1, kfield2 = 1 };

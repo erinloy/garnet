@@ -176,6 +176,7 @@ namespace Tsavorite.core
 
                 if (!entry->IsReadCache) continue;
 
+                var copiedTag = entry->Tag;
                 while (true)
                 {
                     var logicalAddress = entry->Address;
@@ -189,14 +190,28 @@ namespace Tsavorite.core
 
                     _ = Interlocked.Increment(ref checkpointClosedReadCacheRewalks);
                     SpinWaitUntilRecordIsClosed(AbsoluteAddress(logicalAddress), readcacheBase);
-                    entry->word = Volatile.Read(ref live->bucket_entries[index]);
+                    // The live slot is this key's only while it carries the copied tag. A close that unlinked a cached absence leaves address 0,
+                    // below begin, and another key's FindOrCreateTag may reclaim the slot: then this key has no record, and the copied slot is
+                    // emptied rather than given the other key's word, which replay restores (frontier, rg 10-29).
+                    HashBucketEntry now = default;
+                    now.word = Volatile.Read(ref live->bucket_entries[index]);
+                    if (now.word != 0 && now.Tag != copiedTag)
+                    {
+                        _ = Interlocked.Increment(ref checkpointRewalkTagMoved);
+                        entry->word = 0;
+                        break;
+                    }
+                    entry->word = now.word;
                     if (0 == entry->word || !entry->IsReadCache)
                         break;
                 }
             }
         }
 
-        long checkpointClosedReadCacheRewalks;
+        long checkpointClosedReadCacheRewalks, checkpointRewalkTagMoved;
+
+        /// <summary>Of those rewalks, the slots another key had reclaimed by then: the copied key had no record left.</summary>
+        public long CheckpointRewalkTagMoved => Interlocked.Read(ref checkpointRewalkTagMoved);
 
         /// <summary>Index-checkpoint copies whose read-cache chain reached a closed page and were walked again from the live bucket.</summary>
         public long CheckpointClosedReadCacheRewalks => Interlocked.Read(ref checkpointClosedReadCacheRewalks);
