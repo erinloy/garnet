@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace Tsavorite.core
 {
@@ -156,28 +157,49 @@ namespace Tsavorite.core
 
         // Skip over all readcache records in all key chains in this bucket, updating the bucket to point to the first main log record.
         // Called during checkpointing; we create a copy of the hash table page, eliminate read cache pointers from this copy, then write this copy to disk.
-        private void SkipReadCacheBucket(HashBucket* bucket)
+        // 'live' is the bucket 'copy' was taken from. The caller holds the epoch.
+        //
+        // 🩸 THE COPY CAN NAME A CLOSED READ-CACHE PAGE. A head shift bumps its close on the epoch, and a close bumped before this thread
+        // protected does not wait for it: the copy is taken before that close unlinks the copy's read-cache records and walked after their
+        // page is cleared or refilled. The walk then read PreviousAddress 0 (the key's entry kept its tag and lost its whole chain, silently)
+        // or another record's bytes (an address past the log, or off the record alignment, which recovery cleared). Measured on the Ziltch
+        // broker's 10-26 index checkpoint: 1,914 entries past the log's final address and 344 misaligned, every key behind them absent.
+        // So a read-cache address below HeadAddress is never followed: the walk lets that close finish and starts again from the live slot,
+        // which the close has unlinked. An address at or above HeadAddress is safe to follow: its close can only be bumped after we protected.
+        internal void SkipReadCacheBucket(HashBucket* copy, HashBucket* live)
         {
             for (var index = 0; index < Constants.kOverflowBucketIndex; index++)
             {
-                var entry = (HashBucketEntry*)&bucket->bucket_entries[index];
+                var entry = (HashBucketEntry*)&copy->bucket_entries[index];
                 if (0 == entry->word)
                     continue;
 
                 if (!entry->IsReadCache) continue;
-                var logicalAddress = entry->Address;
-                var physicalAddress = readcacheBase.GetPhysicalAddress(logicalAddress);
 
                 while (true)
                 {
-                    logicalAddress = LogRecord.GetInfo(physicalAddress).PreviousAddress;
-                    entry->Address = logicalAddress;
-                    if (!entry->IsReadCache)
+                    var logicalAddress = entry->Address;
+                    while (IsReadCache(logicalAddress) && AbsoluteAddress(logicalAddress) >= readcacheBase.HeadAddress)
+                        logicalAddress = LogRecord.GetInfo(readcacheBase.GetPhysicalAddress(logicalAddress)).PreviousAddress;
+                    if (!IsReadCache(logicalAddress))
+                    {
+                        entry->Address = logicalAddress;
                         break;
-                    physicalAddress = readcacheBase.GetPhysicalAddress(logicalAddress);
+                    }
+
+                    _ = Interlocked.Increment(ref checkpointClosedReadCacheRewalks);
+                    SpinWaitUntilRecordIsClosed(AbsoluteAddress(logicalAddress), readcacheBase);
+                    entry->word = Volatile.Read(ref live->bucket_entries[index]);
+                    if (0 == entry->word || !entry->IsReadCache)
+                        break;
                 }
             }
         }
+
+        long checkpointClosedReadCacheRewalks;
+
+        /// <summary>Index-checkpoint copies whose read-cache chain reached a closed page and were walked again from the live bucket.</summary>
+        public long CheckpointClosedReadCacheRewalks => Interlocked.Read(ref checkpointClosedReadCacheRewalks);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static void ReadCacheAbandonRecord(long physicalAddress)

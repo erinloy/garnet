@@ -339,7 +339,7 @@ namespace Tsavorite.core
                     if (i == 0) j += AllocateChunkSize * RecordSize;
                     for (; j < writeSize; j += sizeof(HashBucket))
                     {
-                        skipReadCache((HashBucket*)(result.mem.aligned_pointer + j));
+                        skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)pointers[i] + j));
                     }
 
                     if (prot) epoch.Suspend();

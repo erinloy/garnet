@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Tsavorite.core
 {
-    internal unsafe delegate void SkipReadCache(HashBucket* bucket);
+    internal unsafe delegate void SkipReadCache(HashBucket* copy, HashBucket* live);
 
     public partial class TsavoriteKV<TStoreFunctions, TAllocator> : TsavoriteBase
         where TStoreFunctions : IStoreFunctions
@@ -153,7 +153,7 @@ namespace Tsavorite.core
                             Buffer.MemoryCopy((void*)chunkStartBucket, result.mem.aligned_pointer, chunkSize, chunkSize);
                             for (int j = 0; j < chunkSize; j += sizeof(HashBucket))
                             {
-                                skipReadCache((HashBucket*)(result.mem.aligned_pointer + j));
+                                skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)chunkStartBucket + j));
                             }
                             if (prot)
                                 epoch.Suspend();
