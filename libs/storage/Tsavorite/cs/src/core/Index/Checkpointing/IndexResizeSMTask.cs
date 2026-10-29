@@ -13,11 +13,15 @@ namespace Tsavorite.core
         where TAllocator : IAllocator<TStoreFunctions>
     {
         readonly TsavoriteKV<TStoreFunctions, TAllocator> store;
+        readonly bool halve;
         long lastVersion;
 
-        public IndexResizeSMTask(TsavoriteKV<TStoreFunctions, TAllocator> store)
+        /// <param name="store"></param>
+        /// <param name="halve">Halve the table (merged at the barrier, or refused there) instead of doubling it.</param>
+        public IndexResizeSMTask(TsavoriteKV<TStoreFunctions, TAllocator> store, bool halve = false)
         {
             this.store = store;
+            this.halve = halve;
         }
 
         /// <inheritdoc />
@@ -34,6 +38,13 @@ namespace Tsavorite.core
                     Debug.Assert(stateMachineDriver.GetNumActiveTransactions(lastVersion) == 0);
                     Debug.Assert(stateMachineDriver.GetNumActiveTransactions(next.Version) == 0);
                     stateMachineDriver.ResetLastVersion();
+
+                    store.indexHalvedAtBarrier = halve;
+                    if (halve)
+                    {
+                        store.HalveAtBarrier();
+                        break;
+                    }
 
                     // Set up the transition to new version of HT
                     var numChunks = (int)(store.state[store.resizeInfo.version].size / Constants.kSizeofChunk);
@@ -73,7 +84,8 @@ namespace Tsavorite.core
                     break;
 
                 case Phase.IN_PROGRESS_GROW:
-                    store.SplitAllBuckets();
+                    if (!halve)
+                        store.SplitAllBuckets();
                     break;
             }
         }

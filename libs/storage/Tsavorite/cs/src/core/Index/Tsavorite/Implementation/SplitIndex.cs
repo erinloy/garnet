@@ -36,6 +36,8 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal void SplitBuckets(long hash)
         {
+            if (indexHalvedAtBarrier)
+                return;   // a halving merged (or refused) at its barrier: there is no chunk to split
             long masked_bucket_index = hash & state[1 - resizeInfo.version].size_mask;
             int chunkOffset = (int)(masked_bucket_index >> Constants.kSizeofChunkBits);
             SplitBuckets(chunkOffset);
