@@ -182,6 +182,14 @@ namespace Tsavorite.core
             return collision;
         }
 
+        // Whether two main-log words name one chain, the later passing through the earlier in memory: a merge keeps the later.
+        private bool IsSuffixPair(long a, long b)
+        {
+            HashBucketEntry x = default, y = default;
+            (x.word, y.word) = (a, b);
+            return !x.IsReadCache && !y.IsReadCache && ChainHolds(Math.Max(x.Address, y.Address), Math.Min(x.Address, y.Address));
+        }
+
         // Whether the chain from main-log address high passes through low, walking only records still in memory.
         private unsafe bool ChainHolds(long high, long low)
         {

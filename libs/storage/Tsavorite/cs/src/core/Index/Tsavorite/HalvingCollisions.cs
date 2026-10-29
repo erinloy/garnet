@@ -18,8 +18,9 @@ namespace Tsavorite.core
         /// One bounded step of a halving's pre-pass: for buckets i in [<paramref name="from"/>, <paramref name="from"/> +
         /// <paramref name="buckets"/>) of the lower half, names every tag that bucket i and bucket i + half both hold with different
         /// words (at most <paramref name="cap"/>; the step stops early when full, and <see cref="IndexScrubStep.Next"/> says where).
-        /// Equal words are not a collision: a grow copied a below-head entry into both halves, and a merge keeps it once. Reads
-        /// only; refused while a resize is in flight.
+        /// Equal words are not a collision: a grow copied a below-head entry into both halves, and a merge keeps it once. Nor is a
+        /// chain that passes through the other's head in memory: the merge keeps the longer, as <c>HalveAtBarrier</c> judges it.
+        /// Reads only; refused while a resize is in flight.
         /// </summary>
         public unsafe IndexScrubStep FindHalvingCollisions(long from, long buckets, List<IndexTagCollision> into, int cap)
         {
@@ -47,7 +48,7 @@ namespace Tsavorite.core
                             if (entry.word == 0 || entry.Tentative)
                                 continue;
                             var other = WordOfTag(low, entry.Tag);
-                            if (other != 0 && other != entry.word)
+                            if (other != 0 && other != entry.word && !IsSuffixPair(other, entry.word))
                             {
                                 into.Add(new(bucket, entry.Tag, other, entry.word));
                                 found++;

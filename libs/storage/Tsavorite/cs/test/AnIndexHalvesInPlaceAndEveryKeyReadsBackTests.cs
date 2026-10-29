@@ -206,11 +206,19 @@ namespace Tsavorite.test
             var big = store.IndexSize;
             foreach (var i in keys.Where(i => Place(i, big).Bucket < size)) Write(context, i, 1);   // the lower half's chains move on past their copies
 
+            var named = new List<IndexTagCollision>();
+            for (long at = 0; ;)
+            {
+                var step = store.FindHalvingCollisions(at, 64, named, int.MaxValue);
+                if (step.Done) break;
+                at = step.Next;
+            }
             var h = await store.HalveIndexAsync();
             ClassicAssert.IsTrue(h.Halved, $"the grown table halves back: {h.Refusal}");
             ClassicAssert.AreEqual(size, store.IndexSize);
             ClassicAssert.Greater(h.Duplicates, 0, $"a below-head entry the grow copied twice is kept once: {h}");
             ClassicAssert.Greater(h.Suffixes, 0, $"a chain that holds its copy is kept, its copy not: {h}");
+            ClassicAssert.IsEmpty(named, $"the pre-scan judges a pair as the barrier does: MUTANT (a suffix named a collision) named {named.Count} of the barrier's {h.Suffixes} suffixes, and a cell would refuse a halving that merges clean");
             foreach (var i in keys)
                 ClassicAssert.AreEqual((true, (long)(i * 10 + (Place(i, big).Bucket < size ? 1 : 0))), Read(context, i), $"key {i} reads its last write after grow and halve");
         }
