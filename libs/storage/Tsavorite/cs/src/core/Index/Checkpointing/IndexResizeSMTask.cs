@@ -14,16 +14,19 @@ namespace Tsavorite.core
     {
         readonly TsavoriteKV<TStoreFunctions, TAllocator> store;
         readonly bool halve, compact;
+        readonly System.Action atBarrier;
         long lastVersion;
 
         /// <param name="store"></param>
         /// <param name="halve">Halve the table (merged at the barrier, or refused there) instead of doubling it.</param>
         /// <param name="compact">Copy the table's chains onto a fresh overflow allocator at the barrier, the size unchanged.</param>
-        public IndexResizeSMTask(TsavoriteKV<TStoreFunctions, TAllocator> store, bool halve = false, bool compact = false)
+        /// <param name="atBarrier">Work done at the barrier in place of a grow (an in-place overflow step), the table's size unchanged.</param>
+        public IndexResizeSMTask(TsavoriteKV<TStoreFunctions, TAllocator> store, bool halve = false, bool compact = false, System.Action atBarrier = null)
         {
             this.store = store;
             this.halve = halve;
             this.compact = compact;
+            this.atBarrier = atBarrier;
         }
 
         /// <inheritdoc />
@@ -41,7 +44,12 @@ namespace Tsavorite.core
                     Debug.Assert(stateMachineDriver.GetNumActiveTransactions(next.Version) == 0);
                     stateMachineDriver.ResetLastVersion();
 
-                    store.indexHalvedAtBarrier = halve || compact;
+                    store.indexHalvedAtBarrier = halve || compact || atBarrier is not null;
+                    if (atBarrier is not null)
+                    {
+                        atBarrier();
+                        break;
+                    }
                     if (compact)
                     {
                         store.CompactOverflowAtBarrier();
@@ -91,7 +99,7 @@ namespace Tsavorite.core
                     break;
 
                 case Phase.IN_PROGRESS_GROW:
-                    if (!halve && !compact)
+                    if (!halve && !compact && atBarrier is null)
                         store.SplitAllBuckets();
                     break;
             }

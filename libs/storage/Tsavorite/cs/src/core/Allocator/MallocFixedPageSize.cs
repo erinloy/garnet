@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -139,6 +140,52 @@ namespace Tsavorite.core
         }
 
         internal int FreeListCount => freeList.Count;   // For test
+
+        /// <summary>The first allocation a caller gets: the ones before it are the never-freed first block.</summary>
+        internal long FirstAllocation => initialAllocation;
+
+        /// <summary>Drains the free list, returning the free allocations below <paramref name="line"/>; one at or past it is dropped, for
+        /// a trim to give back. Only at a full barrier: no allocation may run beside it.</summary>
+        internal List<long> TakeFree(long line)
+        {
+            var below = new List<long>();
+            while (freeList.TryDequeue(out var a))
+                if (a < line) below.Add(a);
+            return below;
+        }
+
+        /// <summary>Whether <see cref="TrimTo"/> may give back what lies past <paramref name="line"/>: past the first block, and no
+        /// checkpoint is writing the pages.</summary>
+        internal bool CanTrimTo(long line) => line >= initialAllocation && line <= count && checkpointCallbackCount == 0;
+
+        /// <summary>Makes <paramref name="line"/> the next allocation and gives back every page past the ones it needs: the line's own,
+        /// and the next when the line is inside a page (an allocation makes the next page only as it enters a page, so that one must
+        /// stand), zeroing what it keeps past the line. Only at a full barrier, with nothing at or past the line reachable and the free list
+        /// holding nothing past it.</summary>
+        internal unsafe void TrimTo(long line)
+        {
+            Debug.Assert(CanTrimTo(line));
+            var keep = (int)(line >> PageSizeBits) + ((line & PageSizeMask) == 0 ? 0 : 1);
+            // what stays allocated past the line is handed out again as new: a stale link left in it would lead a chain past the line
+            for (long a = line; a < count && (a >> PageSizeBits) <= keep;)
+            {
+                var page = (int)(a >> PageSizeBits);
+                var end = Math.Min(count, ((long)page + 1) << PageSizeBits);
+                if (IsBlittable)
+                    new Span<byte>((void*)((long)pointers[page] + (a & PageSizeMask) * RecordSize), (int)((end - a) * RecordSize)).Clear();
+                else
+                    Array.Clear(values[page], (int)(a & PageSizeMask), (int)(end - a));
+                a = end;
+            }
+            for (var i = Math.Max(keep + 1, 2); i < LevelSize && values[i] is not null; i++)
+            {
+                values[i] = null;
+                pointers[i] = IntPtr.Zero;
+            }
+            writeCacheLevel = -1;
+            count = (int)line;
+            Interlocked.MemoryBarrier();
+        }
 
         internal const int AllocateChunkSize = 16;     // internal for test
 
