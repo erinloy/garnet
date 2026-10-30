@@ -275,6 +275,7 @@ namespace Tsavorite.core
         private int registryCompactThreshold;             // amortized dead-weak-reference compaction trigger (guarded by registryLock)
         private int poolState;                            // PoolActive / PoolClosing / PoolClosed
         private long totalManagedAllocations;             // test-only reuse-efficiency counter
+        private long uncachedAllocations;                 // buffers made with no permit (budget spent, or past the pooled ceiling): the GC's on Return
 
         private void InitOriginReturn()
         {
@@ -453,6 +454,7 @@ namespace Tsavorite.core
             {
                 page.cacheable = false;
                 page.permitBytes = 0;
+                Interlocked.Increment(ref uncachedAllocations);
             }
             Debug.Assert(bucket.classCapacityBytes >= RoundUp(required_bytes, sectorSize), "selected class capacity is smaller than the rounded request");
             return page;
@@ -466,6 +468,7 @@ namespace Tsavorite.core
             page.cacheable = false;
             page.permitBytes = 0;
             page.originBucket = null;
+            Interlocked.Increment(ref uncachedAllocations);
             return page;
         }
 
@@ -1012,6 +1015,9 @@ namespace Tsavorite.core
 
         /// <summary>Bytes currently reserved against the pool's budget (0 at full quiesce). Test-only.</summary>
         internal long ReservedBytes => (smallBudget?.Used ?? 0) + (largeBudget?.Used ?? 0);
+        /// <summary>The pool's budgets and what it has made; all zero in legacy mode.</summary>
+        public IoBufferCounts Counts => new(smallBudget?.Used ?? 0, smallBudget?.budgetBytes ?? 0, largeBudget?.Used ?? 0, largeBudget?.budgetBytes ?? 0,
+            Interlocked.Read(ref totalManagedAllocations), Interlocked.Read(ref uncachedAllocations));
         /// <summary>Bytes reserved against the small-class sub-budget. Test-only.</summary>
         internal long SmallReservedBytes => smallBudget?.Used ?? 0;
         /// <summary>Bytes reserved against the large-class sub-budget. Test-only.</summary>

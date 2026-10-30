@@ -276,6 +276,11 @@ namespace Tsavorite.core
         }
     }
 
+    /// <summary>A log's IO buffer pool: bytes reserved against each sub-budget and the budget, buffers ever made, and those made with no permit
+    /// (the budget was spent or the request past the pooled ceiling), which the GC takes back on Return. A pool whose small budget is
+    /// spent makes every small buffer anew: pinned churn, and the pinned heap's holes.</summary>
+    public readonly record struct IoBufferCounts(long ReservedSmall, long BudgetSmall, long ReservedLarge, long BudgetLarge, long Made, long MadeUncached);
+
     /// <summary>
     /// A pool of sector-aligned memory buffers.
     /// <para>

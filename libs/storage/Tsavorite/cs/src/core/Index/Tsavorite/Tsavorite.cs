@@ -59,6 +59,9 @@ namespace Tsavorite.core
         /// <summary>The log's scan frames against their budget (<see cref="ScanReadAhead.BudgetBytes"/>).</summary>
         public ScanFrameCounts ScanFrames => hlogBase.ScanFramePool.Counts;
 
+        /// <summary>The log's IO buffer pool: its budgets, and the buffers it made with and without a permit.</summary>
+        public IoBufferCounts IoBuffers => hlogBase.bufferPool.Counts;
+
         /// <summary>
         /// Size of index in #cache lines (64 bytes each)
         /// </summary>
