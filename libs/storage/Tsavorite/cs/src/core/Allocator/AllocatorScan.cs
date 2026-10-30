@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -282,7 +282,8 @@ namespace Tsavorite.core
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal Status ConditionalScanPush<TInput, TOutput, TContext, TSessionFunctionsWrapper, TSourceLogRecord>(TSessionFunctionsWrapper sessionFunctions,
-                ScanCursorState scanCursorState, in TSourceLogRecord srcLogRecord, long originalAddress, long currentAddress, long minAddress, long maxAddress)
+                ScanCursorState scanCursorState, in TSourceLogRecord srcLogRecord, long originalAddress, long currentAddress, long minAddress, long maxAddress,
+                bool afterIo = false)   // true from a pending push's continuation: the verdict it reaches was paid for by a read
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
             where TSourceLogRecord : ISourceLogRecord
         {
@@ -298,19 +299,24 @@ namespace Tsavorite.core
                 // If a more recent version of the record exists, do not push this one. Start by searching in-memory.
                 if (sessionFunctions.Store.TryFindRecordInMainLogForConditionalOperation<TSourceLogRecord, TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, srcLogRecord, ref stackCtx,
                       currentAddress, minAddress, maxAddress, out internalStatus, out needIO))
+                {
+                    _ = Interlocked.Increment(ref scanSuperseded);
                     return Status.CreateFound();
+                }
             }
             while (sessionFunctions.Store.HandleImmediateNonPendingRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(internalStatus, sessionFunctions));
 
             if (needIO)
             {
                 // A more recent version of the key was not (yet) found and we need another IO to continue searching.
+                _ = Interlocked.Increment(ref scanIoIssued);
                 internalStatus = PrepareIOForConditionalScan(sessionFunctions, ref operationState, keyHash, in srcLogRecord, ref stackCtx, originalAddress, minAddress, maxAddress, scanCursorState);
             }
             else
             {
                 // A more recent version of the key was not found, so push the original record (with its originalAddress).
                 RecordMetadata recordMetadata = new(originalAddress);
+                _ = afterIo ? Interlocked.Increment(ref scanPushedAfterIo) : Interlocked.Increment(ref scanPushedNoIo);
 
                 epoch.Suspend();
                 try
@@ -336,6 +342,13 @@ namespace Tsavorite.core
             }
             return sessionFunctions.Store.HandleOperationStatus(sessionFunctions.Ctx, ref operationState, internalStatus, out _);
         }
+
+        internal long scanPushedNoIo, scanPushedAfterIo, scanSuperseded, scanIoIssued, scanChainRereads;
+
+        /// <summary>How this log's conditional scans (ScanCursor) decided each record's liveness, and the IOs it cost.</summary>
+        public ScanLivenessCounts ScanLiveness =>
+            new(Interlocked.Read(ref scanPushedNoIo), Interlocked.Read(ref scanPushedAfterIo), Interlocked.Read(ref scanSuperseded),
+                Interlocked.Read(ref scanIoIssued), Interlocked.Read(ref scanChainRereads));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static OperationStatus PrepareIOForConditionalScan<TInput, TOutput, TContext, TSourceLogRecord, TSessionFunctionsWrapper>(

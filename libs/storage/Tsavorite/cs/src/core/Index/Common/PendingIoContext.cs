@@ -26,6 +26,8 @@ namespace Tsavorite.core
             /// addresses, scan-cursor state). Touched only after the operation goes pending; the in-memory hot
             /// path never references it.</summary>
             internal PendingState<TInput, TOutput, TContext> pendingState;
+
+            internal override bool IsScanPush => pendingState.type == OperationType.CONDITIONAL_SCAN_PUSH;
         }
     }
 }

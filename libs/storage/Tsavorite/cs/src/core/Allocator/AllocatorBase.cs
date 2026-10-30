@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -2634,6 +2634,8 @@ namespace Tsavorite.core
                 {
                     _wrapper.OnDisposeDiskRecord(ref ctx.diskLogRecord, DisposeReason.DeserializedFromDisk);
                     ctx.DisposeRecord();
+                    if (ctx.IsScanPush)
+                        _ = Interlocked.Increment(ref scanChainRereads);
                     // Re-issue this same op (a reference), repopulating its read buffer; all fields propagate. NOT through
                     // AsyncGetFromDisk's throttle: the read that just completed already left the device's in-flight count, so
                     // this one only takes back its place, and the thread here is a protected run thread (often a pool worker

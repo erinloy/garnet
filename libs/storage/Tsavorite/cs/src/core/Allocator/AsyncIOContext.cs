@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -19,6 +19,9 @@ namespace Tsavorite.core
     /// </summary>
     public class AsyncIOContext
     {
+        /// <summary>Whether this IO decides a conditional scan's liveness (so its chain re-reads are the scan's).</summary>
+        internal virtual bool IsScanPush => false;
+
         /// <summary>
         /// Id
         /// </summary>
