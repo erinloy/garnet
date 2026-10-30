@@ -33,8 +33,10 @@ namespace Tsavorite.core
         /// <param name="localMemorySegmentSize">For DeviceType.LocalMemory: segment size in bytes (must divide <paramref name="capacity"/>). Default 1 GB. Ignored otherwise.</param>
         /// <param name="localMemoryRingCapacity">For DeviceType.LocalMemory: per-submitter ring capacity (power of two), which is the device's in-flight bound (the producer blocks when its ring is full). 0 = default. This is how an in-flight throttle is applied to LocalMemory: its per-ring SPSC backpressure caps in-flight with no device-wide counter. Ignored otherwise.</param>
         /// <param name="logger">Optional logger for device diagnostics.</param>
+        /// <param name="writeThrough">For DeviceType.Native on Windows: each write reaches the disk before it completes, so a device opened with file
+        /// buffering on keeps its writes durable while its reads come from the OS cache. Refused for any other device.</param>
         /// <returns>Device instance</returns>
-        public static IDevice CreateLogDevice(string logPath = null, DeviceType deviceType = DeviceType.Default, bool preallocateFile = false, bool deleteOnClose = false, long capacity = CAPACITY_UNSPECIFIED, bool recoverDevice = false, bool useIoCompletionPort = false, bool disableFileBuffering = true, bool readOnly = false, NativeStorageDevice.IoBackend ioBackend = NativeStorageDevice.IoBackend.Default, int numCompletionThreads = 1, long localMemorySegmentSize = 1L << 30, int localMemoryRingCapacity = 0, ILogger logger = null)
+        public static IDevice CreateLogDevice(string logPath = null, DeviceType deviceType = DeviceType.Default, bool preallocateFile = false, bool deleteOnClose = false, long capacity = CAPACITY_UNSPECIFIED, bool recoverDevice = false, bool useIoCompletionPort = false, bool disableFileBuffering = true, bool readOnly = false, NativeStorageDevice.IoBackend ioBackend = NativeStorageDevice.IoBackend.Default, int numCompletionThreads = 1, long localMemorySegmentSize = 1L << 30, int localMemoryRingCapacity = 0, ILogger logger = null, bool writeThrough = false)
         {
             if (deviceType == DeviceType.Default)
             {
@@ -46,10 +48,13 @@ namespace Tsavorite.core
                 throw new TsavoriteException("logPath must be specified for non-null devices");
             }
 
+            if (writeThrough && !(deviceType == DeviceType.Native && RuntimeInformation.IsOSPlatform(OSPlatform.Windows)))
+                throw new TsavoriteException($"writeThrough is served by the Windows native device only, not {deviceType}");
+
             return deviceType switch
             {
                 DeviceType.Native when RuntimeInformation.IsOSPlatform(OSPlatform.Linux) => new NativeStorageDevice(logPath, deleteOnClose, disableFileBuffering, capacity, numCompletionThreads: numCompletionThreads, ioBackend: ioBackend, logger: logger),
-                DeviceType.Native when RuntimeInformation.IsOSPlatform(OSPlatform.Windows) => new LocalStorageDevice(logPath, preallocateFile, deleteOnClose, disableFileBuffering, capacity, recoverDevice, useIoCompletionPort, readOnly: readOnly, logger: logger),
+                DeviceType.Native when RuntimeInformation.IsOSPlatform(OSPlatform.Windows) => new LocalStorageDevice(logPath, preallocateFile, deleteOnClose, disableFileBuffering, capacity, recoverDevice, useIoCompletionPort, readOnly: readOnly, logger: logger, writeThrough: writeThrough),
                 DeviceType.RandomAccess => new RandomAccessLocalStorageDevice(logPath, preallocateFile, deleteOnClose, disableFileBuffering, capacity, recoverDevice, readOnly: readOnly, logger: logger),
                 DeviceType.FileStream => new ManagedLocalStorageDevice(logPath, preallocateFile, deleteOnClose, disableFileBuffering, capacity, recoverDevice, readOnly: readOnly, logger: logger),
                 DeviceType.Null => new NullDevice(),

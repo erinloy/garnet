@@ -89,6 +89,7 @@ namespace Tsavorite.core
         internal const uint FILE_FLAG_DELETE_ON_CLOSE = 0x04000000;
         internal const uint FILE_FLAG_NO_BUFFERING = 0x20000000;
         internal const uint FILE_FLAG_OVERLAPPED = 0x40000000;
+        internal const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
 
         internal const uint FILE_SHARE_DELETE = 0x00000004;
 

@@ -34,6 +34,7 @@ namespace Tsavorite.core
         private readonly bool preallocateFile;
         private readonly bool deleteOnClose;
         private readonly bool disableFileBuffering;
+        private readonly bool writeThrough;
         private readonly SafeConcurrentDictionary<int, SafeFileHandle> logHandles;
         private readonly bool useIoCompletionPort;
         private readonly ConcurrentQueue<SimpleAsyncResult> results;
@@ -67,6 +68,8 @@ namespace Tsavorite.core
         /// <param name="useIoCompletionPort">Whether we use IO completion port with polling</param>
         /// <param name="readOnly">Indicate if this is a readonly device</param>
         /// <param name="logger">ILogger instance</param>
+        /// <param name="writeThrough">Whether each write reaches the disk before it completes. With file buffering on, this keeps a completed
+        /// write durable (Tsavorite never flushes a handle's buffers) while reads are served from the OS cache.</param>
         public LocalStorageDevice(string filename,
                                   bool preallocateFile = false,
                                   bool deleteOnClose = false,
@@ -75,8 +78,9 @@ namespace Tsavorite.core
                                   bool recoverDevice = false,
                                   bool useIoCompletionPort = false,
                                   bool readOnly = false,
-                                  ILogger logger = null)
-            : this(filename, preallocateFile, deleteOnClose, disableFileBuffering, capacity, recoverDevice, null, useIoCompletionPort, readOnly: readOnly)
+                                  ILogger logger = null,
+                                  bool writeThrough = false)
+            : this(filename, preallocateFile, deleteOnClose, disableFileBuffering, capacity, recoverDevice, null, useIoCompletionPort, readOnly: readOnly, writeThrough: writeThrough)
         {
         }
 
@@ -104,6 +108,7 @@ namespace Tsavorite.core
         /// <param name="useIoCompletionPort">Whether we use IO completion port with polling</param>
         /// <param name="readOnly">Indicate if this is a readonly device</param>
         /// <param name="logger">ILogger instance</param>
+        /// <param name="writeThrough">Whether each write reaches the disk before it completes</param>
         protected internal LocalStorageDevice(string filename,
                                       bool preallocateFile = false,
                                       bool deleteOnClose = false,
@@ -113,7 +118,8 @@ namespace Tsavorite.core
                                       IEnumerable<KeyValuePair<int, SafeFileHandle>> initialLogFileHandles = null,
                                       bool useIoCompletionPort = true,
                                       bool readOnly = false,
-                                      ILogger logger = null)
+                                      ILogger logger = null,
+                                      bool writeThrough = false)
                 : base(filename, NativeStorageDevice.ProbeSectorSize(filename), capacity)
         {
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -153,6 +159,7 @@ namespace Tsavorite.core
             this.preallocateFile = preallocateFile;
             this.deleteOnClose = deleteOnClose;
             this.disableFileBuffering = disableFileBuffering;
+            this.writeThrough = writeThrough;
             this.readOnly = readOnly;
             this.logger = logger;
             results = new ConcurrentQueue<SimpleAsyncResult>();
@@ -435,12 +442,12 @@ namespace Tsavorite.core
         }
 
         private SafeFileHandle CreateHandle(int segmentId, bool disableFileBuffering, bool deleteOnClose, bool preallocateFile, long segmentSize, string fileName, IntPtr ioCompletionPort)
-            => CreateHandle(segmentId, disableFileBuffering, deleteOnClose, preallocateFile, segmentSize, fileName, ioCompletionPort, OmitSegmentIdFromFileName, readOnly);
+            => CreateHandle(segmentId, disableFileBuffering, deleteOnClose, preallocateFile, segmentSize, fileName, ioCompletionPort, OmitSegmentIdFromFileName, readOnly, writeThrough: writeThrough);
 
         /// <summary>
         /// Creates a SafeFileHandle for the specified segment. This can be used by derived classes to prepopulate logHandles in the constructor.
         /// </summary>
-        protected internal static SafeFileHandle CreateHandle(int segmentId, bool disableFileBuffering, bool deleteOnClose, bool preallocateFile, long segmentSize, string fileName, IntPtr ioCompletionPort, bool omitSegmentId = false, bool readOnly = false, bool createIfMissing = true)
+        protected internal static SafeFileHandle CreateHandle(int segmentId, bool disableFileBuffering, bool deleteOnClose, bool preallocateFile, long segmentSize, string fileName, IntPtr ioCompletionPort, bool omitSegmentId = false, bool readOnly = false, bool createIfMissing = true, bool writeThrough = false)
         {
             uint fileAccess = readOnly ? Native32.GENERIC_READ : Native32.GENERIC_READ | Native32.GENERIC_WRITE;
             uint fileShare = unchecked(((uint)FileShare.ReadWrite & ~(uint)FileShare.Inheritable));
@@ -450,6 +457,11 @@ namespace Tsavorite.core
             if (disableFileBuffering)
             {
                 fileFlags |= Native32.FILE_FLAG_NO_BUFFERING;
+            }
+
+            if (writeThrough)
+            {
+                fileFlags |= Native32.FILE_FLAG_WRITE_THROUGH;
             }
 
             if (deleteOnClose)
@@ -543,7 +555,7 @@ namespace Tsavorite.core
             => CreateHandle(segmentId, disableFileBuffering, deleteOnClose, preallocateFile, segmentSize, FileName, ioCompletionPort);
 
         private SafeFileHandle CreateExistingHandle(int segmentId)
-            => CreateHandle(segmentId, disableFileBuffering, deleteOnClose, preallocateFile, segmentSize, FileName, ioCompletionPort, OmitSegmentIdFromFileName, readOnly, createIfMissing: false);
+            => CreateHandle(segmentId, disableFileBuffering, deleteOnClose, preallocateFile, segmentSize, FileName, ioCompletionPort, OmitSegmentIdFromFileName, readOnly, createIfMissing: false, writeThrough: writeThrough);
 
         /// Sets file size to the specified value.
         /// Does not reset file seek pointer to original location.
