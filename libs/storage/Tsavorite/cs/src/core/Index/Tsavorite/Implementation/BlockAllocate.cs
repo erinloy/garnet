@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System.Diagnostics;
@@ -131,12 +131,6 @@ namespace Tsavorite.core
             return false;
         }
 
-        long readCacheNoRoom;
-
-        /// <summary>Read-cache copies (a pending read's promotion, a hit's move to the tail, or a cold answer's offer) refused because the
-        /// cache had no room at that instant: its page turn was in flight and a copy never waits for it.</summary>
-        public long ReadCacheNoRoom => Interlocked.Read(ref readCacheNoRoom);
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         bool TryAllocateRecordReadCache<TInput, TOutput, TContext>(ref OperationState<TInput, TOutput, TContext> operationState, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx,
                                                        in RecordSizeInfo recordSizeInfo, out long newLogicalAddress, out long newPhysicalAddress, out OperationStatus status)
@@ -144,13 +138,8 @@ namespace Tsavorite.core
             // Spin to make sure the start of the tag chain is not readcache, or that newLogicalAddress is > the first address in the tag chain.
             while (true)
             {
-                if (!readcacheBase.TryAllocateNoWait(recordSizeInfo.AllocatedInlineRecordSize, out newLogicalAddress))
-                {
-                    _ = Interlocked.Increment(ref readCacheNoRoom);
-                    status = OperationStatus.ALLOCATE_FAILED;   // a read-cache copy is an offer: no room now is no copy, never a wait
+                if (!TryBlockAllocate(readcacheBase, recordSizeInfo.AllocatedInlineRecordSize, out newLogicalAddress, ref operationState, out status))
                     break;
-                }
-                status = OperationStatus.SUCCESS;
                 newPhysicalAddress = readcacheBase.GetPhysicalAddress(newLogicalAddress);
 
                 if (VerifyInMemoryAddresses(ref stackCtx))
