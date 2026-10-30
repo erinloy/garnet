@@ -13,15 +13,17 @@ namespace Tsavorite.core
         where TAllocator : IAllocator<TStoreFunctions>
     {
         readonly TsavoriteKV<TStoreFunctions, TAllocator> store;
-        readonly bool halve;
+        readonly bool halve, compact;
         long lastVersion;
 
         /// <param name="store"></param>
         /// <param name="halve">Halve the table (merged at the barrier, or refused there) instead of doubling it.</param>
-        public IndexResizeSMTask(TsavoriteKV<TStoreFunctions, TAllocator> store, bool halve = false)
+        /// <param name="compact">Copy the table's chains onto a fresh overflow allocator at the barrier, the size unchanged.</param>
+        public IndexResizeSMTask(TsavoriteKV<TStoreFunctions, TAllocator> store, bool halve = false, bool compact = false)
         {
             this.store = store;
             this.halve = halve;
+            this.compact = compact;
         }
 
         /// <inheritdoc />
@@ -39,7 +41,12 @@ namespace Tsavorite.core
                     Debug.Assert(stateMachineDriver.GetNumActiveTransactions(next.Version) == 0);
                     stateMachineDriver.ResetLastVersion();
 
-                    store.indexHalvedAtBarrier = halve;
+                    store.indexHalvedAtBarrier = halve || compact;
+                    if (compact)
+                    {
+                        store.CompactOverflowAtBarrier();
+                        break;
+                    }
                     if (halve)
                     {
                         store.HalveAtBarrier();
@@ -84,7 +91,7 @@ namespace Tsavorite.core
                     break;
 
                 case Phase.IN_PROGRESS_GROW:
-                    if (!halve)
+                    if (!halve && !compact)
                         store.SplitAllBuckets();
                     break;
             }
