@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -1513,6 +1513,25 @@ namespace Tsavorite.core
             return logicalAddress != 0;
         }
 
+        /// <summary>Try allocate for a copy that is only an offer (the read cache): a page turn in flight is retried a few yields, never
+        /// waited for, so a full cache costs its copier nothing (Ziltch broker 10-30: 17 pool threads at once in the read cache's flush wait).</summary>
+        /// <returns>True with the address; false when there is no room now.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryAllocateNoWait(int numSlots, out long logicalAddress)
+        {
+            for (var spins = 0; (logicalAddress = TryAllocate(numSlots)) < 0; _ = Thread.Yield())
+            {
+                _ = TryComplete();
+                epoch.ProtectAndDrain();
+                if (++spins >= Constants.kFlushSpinCount)
+                {
+                    logicalAddress = 0;
+                    return false;
+                }
+            }
+            return logicalAddress != 0;
+        }
+
         /// <summary>
         /// Calculate the new ReadOnlyAddress from the inputs. This may be called when <see cref="AllocatedPageCount"/> has changed due to memory
         /// size limits, so we cannot use a constant lag approach.
@@ -2634,6 +2653,8 @@ namespace Tsavorite.core
                 {
                     _wrapper.OnDisposeDiskRecord(ref ctx.diskLogRecord, DisposeReason.DeserializedFromDisk);
                     ctx.DisposeRecord();
+                    if (ctx.IsScanPush)
+                        _ = Interlocked.Increment(ref scanChainRereads);
                     // Re-issue this same op (a reference), repopulating its read buffer; all fields propagate. NOT through
                     // AsyncGetFromDisk's throttle: the read that just completed already left the device's in-flight count, so
                     // this one only takes back its place, and the thread here is a protected run thread (often a pool worker

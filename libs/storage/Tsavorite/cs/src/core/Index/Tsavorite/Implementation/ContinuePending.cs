@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System.Diagnostics;
@@ -474,7 +474,12 @@ namespace Tsavorite.core
         {
             // If the key was found at or above minAddress, do nothing; we'll push it when we get to it. If we flagged the iteration to stop, do nothing.
             // If we're here we know the key matches because AllocatorBase.AsyncGetFromDiskCallback skips colliding keys by following the .PreviousAddress chain.
-            if (request.logicalAddress >= pendingState.minAddress || pendingState.scanCursorState.stop)
+            if (request.logicalAddress >= pendingState.minAddress)
+            {
+                _ = System.Threading.Interlocked.Increment(ref hlogBase.scanSuperseded);
+                return OperationStatus.SUCCESS;
+            }
+            if (pendingState.scanCursorState.stop)
                 return OperationStatus.SUCCESS;
 
             // Prepare to push to caller's iterator functions. Use data from pendingState, not request; we're only made it to this line if the key was not found,
@@ -482,7 +487,7 @@ namespace Tsavorite.core
             // record was not added to the log after we initialized the pending IO.
             _ = hlogBase.ConditionalScanPush<TInput, TOutput, TContext, TSessionFunctionsWrapper, DiskLogRecord>(sessionFunctions, pendingState.scanCursorState,
                 in pendingState.diskLogRecord, originalAddress: operationState.originalAddress, currentAddress: request.logicalAddress,
-                minAddress: operationState.initialLatestLogicalAddress + 1, maxAddress: pendingState.maxAddress);
+                minAddress: operationState.initialLatestLogicalAddress + 1, maxAddress: pendingState.maxAddress, afterIo: true);
 
             // ConditionalScanPush has already called HandleOperationStatus, so return SUCCESS here.
             return OperationStatus.SUCCESS;

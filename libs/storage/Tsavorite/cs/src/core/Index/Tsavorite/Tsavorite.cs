@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -61,6 +61,9 @@ namespace Tsavorite.core
 
         /// <summary>The log's IO buffer pool: its budgets, and the buffers it made with and without a permit.</summary>
         public IoBufferCounts IoBuffers => hlogBase.bufferPool.Counts;
+
+        /// <summary>How the log's conditional scans decided each record's liveness, and the IOs those decisions cost.</summary>
+        public ScanLivenessCounts ScanLiveness => hlogBase.ScanLiveness;
 
         /// <summary>
         /// Size of index in #cache lines (64 bytes each)

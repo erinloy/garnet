@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -49,6 +49,12 @@ namespace Tsavorite.core
         /// another's sink would otherwise wait on itself.</summary>
         public static TimeSpan BudgetWait = TimeSpan.FromSeconds(10);
     }
+
+    /// <summary>A log's conditional scans by how each record's liveness was decided: pushed with no IO (the index entry, or an in-memory
+    /// chain, said it was the newest); pushed after IO (a chain below memory had to be read); superseded (a newer record of its key was
+    /// found). IoIssued counts the IOs scans began; ChainRereads counts the further reads those IOs made down a chain on the device,
+    /// past records of other keys sharing the tag, or re-reading a record that arrived short.</summary>
+    public readonly record struct ScanLivenessCounts(long PushedNoIo, long PushedAfterIo, long Superseded, long IoIssued, long ChainRereads);
 
     /// <summary>A log's scan frames against its budget: what its scans may hold at once, hold now, the slots kept for the next scan,
     /// the slots ever made, and how often a scan was trimmed to what was left, waited for it, or went past it.</summary>
