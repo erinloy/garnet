@@ -33,13 +33,15 @@ namespace Tsavorite.core
                     return new(0, 0, from, false, true);
                 var version = resizeInfo.version;
                 var half = state[version].size / 2;
-                var end = Math.Min(half, Math.Max(from, 0) + buckets);
+                var end = buckets >= half - Math.Max(from, 0) ? half : Math.Max(from, 0) + buckets;   // a step of long.MaxValue is the whole table, never an overflow
                 long found = 0;
+                var s = Interlocked.Exchange(ref prescanScratch, null) ?? new HalvingScratch();
                 var bucket = Math.Max(from, 0);
                 for (; bucket < end && into.Count < cap; bucket++)
                 {
                     var high = state[version].tableAligned + bucket + half;
                     var low = state[version].tableAligned + bucket;
+                    StampTags(low, s);   // the low chain read once: each high entry finds its tag's word in O(1), not by walking it again
                     for (var b = high; b != null; b = NextOverflow(b))
                         for (var slot = 0; slot < Constants.kOverflowBucketIndex; slot++)
                         {
@@ -47,7 +49,7 @@ namespace Tsavorite.core
                             entry.word = b->bucket_entries[slot];
                             if (entry.word == 0 || entry.Tentative)
                                 continue;
-                            var other = WordOfTag(low, entry.Tag);
+                            var other = s.Stamp[entry.Tag] == s.Generation ? s.Words[s.At[entry.Tag]] : 0;
                             if (other != 0 && other != entry.word && !IsSuffixPair(other, entry.word))
                             {
                                 into.Add(new(bucket, entry.Tag, other, entry.word));
@@ -55,6 +57,7 @@ namespace Tsavorite.core
                             }
                         }
                 }
+                prescanScratch = s;
                 return new(found, 0, bucket, bucket >= half, false);
             }
             finally
@@ -97,23 +100,30 @@ namespace Tsavorite.core
             }
         }
 
-        private unsafe HashBucket* NextOverflow(HashBucket* b)
-        {
-            var overflow = b->bucket_entries[Constants.kOverflowBucketIndex] & LogAddress.kAddressBitMask;
-            return overflow == 0 ? null : (HashBucket*)overflowBucketsAllocator.GetPhysicalAddress(overflow);
-        }
+        private HalvingScratch prescanScratch;
 
-        private unsafe long WordOfTag(HashBucket* b, ushort tag)
+        // The first word of each tag in a bucket's chain, by tag, under a fresh generation: the first in chain order, as a lookup finds it.
+        private unsafe void StampTags(HashBucket* b, HalvingScratch s)
         {
+            s.Words.Clear();
+            if (++s.Generation == int.MaxValue) { Array.Clear(s.Stamp); s.Generation = 1; }
             for (; b != null; b = NextOverflow(b))
                 for (var slot = 0; slot < Constants.kOverflowBucketIndex; slot++)
                 {
                     HashBucketEntry entry = default;
                     entry.word = b->bucket_entries[slot];
-                    if (entry.word != 0 && !entry.Tentative && entry.Tag == tag)
-                        return entry.word;
+                    if (entry.word == 0 || entry.Tentative || s.Stamp[entry.Tag] == s.Generation)
+                        continue;
+                    s.Stamp[entry.Tag] = s.Generation;
+                    s.At[entry.Tag] = s.Words.Count;
+                    s.Words.Add(entry.word);
                 }
-            return 0;
+        }
+
+        private unsafe HashBucket* NextOverflow(HashBucket* b)
+        {
+            var overflow = b->bucket_entries[Constants.kOverflowBucketIndex] & LogAddress.kAddressBitMask;
+            return overflow == 0 ? null : (HashBucket*)overflowBucketsAllocator.GetPhysicalAddress(overflow);
         }
     }
 }
