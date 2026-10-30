@@ -172,6 +172,38 @@ namespace Tsavorite.core
             return lastOverflowCompaction;
         }
 
+        /// <summary>
+        /// The in-place compaction's last barrier with no walk (a table too large to walk at one barrier): trusts the caller's pass. The
+        /// caller read <paramref name="highWater"/> (<see cref="OverflowHighWater"/>) before the pass's first step, and every step of the
+        /// pass left no chain bucket past <paramref name="line"/>. Each step drains the free list of buckets past the line, so after the
+        /// first one an operation links only a bucket below the line, or one past the high water. Refused, nothing trimmed, when the high
+        /// water moved, so the caller packs again.
+        /// </summary>
+        public async Task<IndexOverflowCompaction> TrimOverflowAfterCleanPassAsync(long line, long highWater)
+        {
+            if (epoch.ThisInstanceProtected())
+                throw new TsavoriteException("Cannot use TrimOverflow when using non-async sessions");
+            lastOverflowCompaction = new(false, "the resize state machine did not run", OverflowBucketCount, OverflowBucketCount, 0, 0, 0);
+            _ = await stateMachineDriver.RunAsync(new IndexResizeSM(new IndexResizeSMTask<TStoreFunctions, TAllocator>(this,
+                atBarrier: () =>
+                {
+                    var clock = Stopwatch.StartNew();
+                    var before = OverflowBucketCount;
+                    if (before != highWater || line > before || !overflowBucketsAllocator.CanTrimTo(line))
+                    {
+                        lastOverflowCompaction = new(false, $"the high water is {before:N0}, not the pass's {highWater:N0}, or the line {line:N0} is past it, or a checkpoint is writing it", before, before, 0, 0, 0);
+                        return;
+                    }
+                    foreach (var a in overflowBucketsAllocator.TakeFree(line)) overflowBucketsAllocator.Free(a);
+                    overflowBucketsAllocator.TrimTo(line);
+                    lastOverflowCompaction = new(true, null, before, OverflowBucketCount, 0, 0, clock.Elapsed.TotalMilliseconds);
+                }))).ConfigureAwait(false);
+            return lastOverflowCompaction;
+        }
+
+        /// <summary>The overflow allocator's high water: past it no bucket was ever handed out.</summary>
+        public long OverflowHighWater => OverflowBucketCount;
+
         internal unsafe void PackOverflowAtBarrier(long from, long visits, long line)
         {
             var clock = Stopwatch.StartNew();

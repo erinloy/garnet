@@ -209,5 +209,74 @@ namespace Tsavorite.test
             for (var i = 0; i < 2000; i++)
                 ClassicAssert.AreEqual((true, (Past + i) * 10L), Read(context, Past + i), "the trimmed allocator takes new chains past its line");
         }
+
+        /// <summary>The mesh's form: a table too large to walk at one barrier is trimmed after a clean pass with no walk. Passes repeat until
+        /// one leaves nothing past the line; the trim is refused once an allocation went past the high water the pass started from.</summary>
+        [Test]
+        [Category("TsavoriteKV")]
+        [Category("Index")]
+        public async Task A_table_packed_clean_below_a_line_is_trimmed_without_a_walk_and_every_key_reads_back([Values] bool writing)
+        {
+            using var session = store.NewSession<KeyStruct, InputStruct, OutputStruct, Empty, Quiet>(new Quiet());
+            var context = session.BasicContext;
+            const int Live = 40_000, Dead = 60_000;
+            for (var i = Live; i < Live + Dead; i++) Write(context, i, 0);
+            var mid = store.Log.TailAddress;
+            for (var i = 0; i < Live; i++) Write(context, i, 0);
+            store.Log.ShiftBeginAddress(mid);
+            var high = store.OverflowBucketCount;
+            var line = 16 + Count().Needed + 256;
+
+            var generation = new int[Live];
+            using var stop = new CancellationTokenSource();
+            var writer = !writing ? Task.CompletedTask : Task.Run(() =>
+            {
+                using var ws = store.NewSession<KeyStruct, InputStruct, OutputStruct, Empty, Quiet>(new Quiet());
+                for (var n = 0; n < Rewritten * 20 && !stop.IsCancellationRequested; n++)
+                {
+                    var i = n % Rewritten;
+                    Write(ws.BasicContext, i, Volatile.Read(ref generation[i]) + 1);
+                    Volatile.Write(ref generation[i], generation[i] + 1);
+                }
+            });
+
+            IndexOverflowCompaction trim = default;
+            var passes = 0;
+            for (; passes < 4; passes++)
+            {
+                var water = store.OverflowHighWater;
+                long past = 0;
+                for (long at = 0; ;)
+                {
+                    var step = await store.PackOverflowStepAsync(at, 2048, line);
+                    ClassicAssert.IsTrue(step.Ran, step.Refusal);
+                    (at, past) = (step.Next, past + step.PastLine);
+                    if (step.Done) break;
+                }
+                if (past > 0) continue;
+                trim = await store.TrimOverflowAfterCleanPassAsync(line, water);
+                if (trim.Compacted) break;
+            }
+            stop.Cancel();
+            await writer;
+            TestContext.Progress.WriteLine($"{passes + 1} pass(es); trim {trim}; allocator {high:N0} -> {store.OverflowBucketCount:N0}, line {line:N0}");
+            ClassicAssert.IsTrue(trim.Compacted, trim.Refusal);
+            ClassicAssert.AreEqual(line, store.OverflowBucketCount, "the allocator's high water is the line");
+            ClassicAssert.Less(store.OverflowBucketCount, high / 2, "the overflow falls to what the live entries need");
+            ClassicAssert.LessOrEqual(Count().Reached, line, "no chain reaches past the line");
+            for (var i = 0; i < Live + Dead; i++)
+            {
+                var expected = i < Live ? (true, (long)(i * 10 + (i < Rewritten ? Volatile.Read(ref generation[i]) : 0))) : (false, -1L);
+                ClassicAssert.AreEqual(expected, Read(context, i), $"key {i} reads as before, or as its last write");
+            }
+
+            var moved = store.OverflowHighWater - 1;
+            for (var i = 0; i < 20_000; i++) Write(context, Live + Dead + i, 0);   // new chains past the line: the high water moves
+            ClassicAssert.Greater(store.OverflowHighWater, line, "CONTROL: the writes allocated past the line");
+            var refused = await store.TrimOverflowAfterCleanPassAsync(line, moved);
+            ClassicAssert.IsFalse(refused.Compacted, "MUTANT (no high-water check): a trim after the high water moved cuts the chains past the line");
+            for (var i = 0; i < 20_000; i++)
+                ClassicAssert.AreEqual((true, (Live + Dead + i) * 10L), Read(context, Live + Dead + i), "the refused trim cut nothing");
+        }
     }
 }
