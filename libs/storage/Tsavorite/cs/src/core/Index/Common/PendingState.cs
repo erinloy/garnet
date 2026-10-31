@@ -75,6 +75,8 @@ namespace Tsavorite.core
                 if (diskLogRecord.IsSet)
                     diskLogRecord.Dispose();
                 diskLogRecord = default;
+                // A key not moved to a completed output still holds its pooled buffer and that buffer's permit.
+                requestKey.Dispose();
                 requestKey = default;
                 input?.Dispose();
                 input = default;
