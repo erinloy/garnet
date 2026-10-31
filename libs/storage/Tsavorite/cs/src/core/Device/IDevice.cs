@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Generic;
 
 namespace Tsavorite.core
 {
@@ -204,6 +205,19 @@ namespace Tsavorite.core
         /// Reset the device (close and forget open handles)
         /// </summary>
         void Reset();
+
+        /// <summary>
+        /// Recovery asks this when the files the device found at open do not cover the checkpoint's segments
+        /// [<paramref name="firstSegment"/>..<paramref name="lastSegment"/>]: a device whose directory holds a later run of
+        /// files covering both may take that run as its extent and pass over the files below it. False leaves the refusal.
+        /// </summary>
+        bool AdoptSegmentRunHolding(int firstSegment, int lastSegment) => false;
+
+        /// <summary>Segment files whose delete was refused and are held for a retry, and the retries made.</summary>
+        SegmentDeleteCounts SegmentDeletes => default;
+
+        /// <summary>The segment files below the run recovery adopted (see <see cref="AdoptSegmentRunHolding"/>): passed over, never read.</summary>
+        IReadOnlyList<int> SegmentsPassedOver => [];
     }
 
     /// <summary>

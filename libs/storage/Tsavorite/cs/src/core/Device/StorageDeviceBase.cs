@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 
@@ -212,6 +213,18 @@ namespace Tsavorite.core
         /// <param name="result"></param>
         public abstract void RemoveSegmentAsync(int segment, AsyncCallback callback, IAsyncResult result);
 
+        /// <summary>Deletes again the segment files a refused delete left behind; a device that holds none does nothing.</summary>
+        protected virtual void RetryHeldSegments() { }
+
+        /// <inheritdoc/>
+        public virtual bool AdoptSegmentRunHolding(int firstSegment, int lastSegment) => false;
+
+        /// <inheritdoc/>
+        public virtual SegmentDeleteCounts SegmentDeletes => default;
+
+        /// <inheritdoc/>
+        public virtual IReadOnlyList<int> SegmentsPassedOver => [];
+
         /// <summary>
         /// <see cref="IDevice.RemoveSegment(int)"/>
         /// By default the implementation calls into <see cref="RemoveSegmentAsync(int, AsyncCallback, IAsyncResult)"/>
@@ -244,6 +257,8 @@ namespace Tsavorite.core
         /// <param name="result"></param>
         public void TruncateUntilSegmentAsync(int toSegment, AsyncCallback callback, IAsyncResult result)
         {
+            RetryHeldSegments();
+
             // Reset begin range to at least toSegment
             if (!Utility.MonotonicUpdate(ref startSegment, toSegment, out int oldStart))
             {

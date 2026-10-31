@@ -38,6 +38,9 @@ namespace Tsavorite.core
         private readonly SafeConcurrentDictionary<int, SafeFileHandle> logHandles;
         private readonly bool useIoCompletionPort;
         private readonly ConcurrentQueue<SimpleAsyncResult> results;
+        private readonly ConcurrentDictionary<int, int> heldSegments = new();
+        private long segmentDeletesRetried, segmentDeletesRefused;
+        private int[] recoveredSegmentFiles;
         private bool _disposed;
         readonly bool readOnly;
         readonly ILogger logger;
@@ -202,6 +205,7 @@ namespace Tsavorite.core
                 segids.Add(int.Parse(item.Name.Replace(bareName, "").Replace(".", "")));
             }
             segids.Sort();
+            recoveredSegmentFiles = [.. segids];
 
             // THE RECOVERED RANGE IS THE CONTIGUOUS RUN FROM THE LOWEST SEGMENT — never a segment index past the tail.
             // The old walk adopted any LATER segment after a gap as a new start ("if (segmentId != prev + 1) startSegment =
@@ -374,8 +378,88 @@ namespace Tsavorite.core
         {
             if (logHandles.TryRemove(segment, out SafeFileHandle logHandle))
                 logHandle.Dispose();
-            Native32.DeleteFileW(GetSegmentName(segment));
+            DeleteOrHold(segment);
         }
+
+        /// <summary>
+        /// A DELETE THE OS REFUSES IS HELD, NEVER DROPPED. Truncation moves startSegment before it deletes, so a segment whose
+        /// delete failed was never tried again and outlived every later truncation; with a gap above it, the next open's
+        /// directory walk took it as the log's start and recovery refused (mesh 10-31 13:37Z: hlog.log.121 stayed while
+        /// 122..438 went). The file is held here and deleted again at every later truncation and at Dispose; its refusal is
+        /// logged once, with the Win32 error and the processes holding it.
+        /// </summary>
+        private void DeleteOrHold(int segment)
+        {
+            var name = GetSegmentName(segment);
+            if (Native32.DeleteFileW(name))
+            {
+                _ = heldSegments.TryRemove(segment, out _);
+                return;
+            }
+            var error = Marshal.GetLastWin32Error();
+            if (error is SegmentFiles.ErrorFileNotFound or SegmentFiles.ErrorPathNotFound)
+            {
+                _ = heldSegments.TryRemove(segment, out _);
+                return;
+            }
+            _ = Interlocked.Increment(ref segmentDeletesRefused);
+            if (heldSegments.TryAdd(segment, error))
+                logger?.LogWarning("RemoveSegment: segment file {file} was not deleted: {error}, held by {holders}. It is held and deleted again at every later truncation and at Dispose.",
+                    name, SegmentFiles.NameOf(error), SegmentFiles.HoldersOf(name));
+        }
+
+        /// <inheritdoc/>
+        protected override void RetryHeldSegments()
+        {
+            if (heldSegments.IsEmpty || readOnly)
+                return;
+            foreach (var segment in heldSegments.Keys)
+            {
+                _ = Interlocked.Increment(ref segmentDeletesRetried);
+                DeleteOrHold(segment);
+            }
+        }
+
+        /// <inheritdoc/>
+        public override SegmentDeleteCounts SegmentDeletes => new(heldSegments.Count, Interlocked.Read(ref segmentDeletesRetried), Interlocked.Read(ref segmentDeletesRefused));
+
+        /// <summary>
+        /// THE CHECKPOINT PROVES WHICH RUN IS THE LOG. RecoverFiles takes the run from the lowest file, the rule for a stray far
+        /// ABOVE the log (99785); a stale file BELOW a gap then names a run of one file and recovery refuses ("Unable to set
+        /// last valid segment to 438, last available segment on disk is 121"). When the checkpoint's begin and tail segments
+        /// both lie in one later run of files, that run is the log's extent: it is taken, and the files below it are named and
+        /// held for deletion, never read. A gap inside [begin..tail], or a run holding begin but not tail, refuses as before.
+        /// </summary>
+        public override bool AdoptSegmentRunHolding(int firstSegment, int lastSegment)
+        {
+            var files = recoveredSegmentFiles;
+            var at = files is null ? -1 : Array.BinarySearch(files, firstSegment);
+            if (at < 0)
+                return false;
+            var from = at;
+            while (from > 0 && files[from - 1] == files[from] - 1)
+                from--;
+            var to = at;
+            while (to + 1 < files.Length && files[to + 1] == files[to] + 1)
+                to++;
+            if (files[to] < lastSegment || (files[from] == startSegment && files[to] == endSegment))
+                return false;
+
+            var below = files[..from];
+            logger?.LogWarning("RecoverFiles: the checkpoint's segments [{first}..{last}] lie in the run of files {{{runStart}..{runEnd}}}, not in {{{oldStart}..{oldEnd}}}; that run is taken as this log's extent. The files below it are passed over and never read{held}: {below}",
+                firstSegment, lastSegment, files[from], files[to], startSegment, endSegment, readOnly ? " (a read-only open leaves them)" : ", held for deletion", string.Join(", ", Array.ConvertAll(below, s => System.IO.Path.GetFileName(GetSegmentName(s)))));
+            startSegment = files[from];
+            endSegment = files[to];
+            if (!readOnly)
+                foreach (var segment in below)
+                    _ = heldSegments.TryAdd(segment, 0);
+            passedOver = below;
+            return true;
+        }
+
+        /// <inheritdoc/>
+        public override IReadOnlyList<int> SegmentsPassedOver => passedOver;
+        private int[] passedOver = [];
 
         /// <summary>
         /// <see cref="IDevice.RemoveSegmentAsync(int, AsyncCallback, IAsyncResult)"/>
@@ -399,6 +483,7 @@ namespace Tsavorite.core
             _disposed = true;
             foreach (var logHandle in logHandles.Values)
                 logHandle.Dispose();
+            RetryHeldSegments();
 
             if (useIoCompletionPort)
                 new SafeFileHandle(ioCompletionPort, true).Dispose();

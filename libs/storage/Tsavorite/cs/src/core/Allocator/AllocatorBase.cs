@@ -834,6 +834,15 @@ namespace Tsavorite.core
                     lastAvailSegment = currTailSegment;
             }
 
+            // A STALE FILE BELOW A GAP: the device took the run from its lowest file, but the checkpoint proves which run
+            // is the log. A device holding one later run that covers both begin and tail takes it (AdoptSegmentRunHolding).
+            if ((firstValidSegment < firstAvailSegment || (lastAvailSegment >= 0 && lastValidSegment > lastAvailSegment))
+                && device.AdoptSegmentRunHolding((int)firstValidSegment, lastValidSegment))
+            {
+                firstAvailSegment = device.StartSegment;
+                lastAvailSegment = Math.Max(lastAvailSegment, device.EndSegment);
+            }
+
             logger?.LogInformation("Available segment range on device: [{firstAvailSegment}--{lastAvailSegment}]", firstAvailSegment, lastAvailSegment);
 
             if (firstValidSegment < firstAvailSegment)
