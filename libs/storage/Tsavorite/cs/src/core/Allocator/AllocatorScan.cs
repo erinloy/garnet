@@ -306,6 +306,13 @@ namespace Tsavorite.core
             }
             while (sessionFunctions.Store.HandleImmediateNonPendingRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(internalStatus, sessionFunctions));
 
+            var unproven = needIO && scanCursorState.pushUnproven;
+            if (unproven)
+            {
+                // The caller takes a record it cannot prove without a read: it copies in address order, so a newer record it is also handed wins.
+                needIO = false;
+                _ = Interlocked.Increment(ref scanPushedUnproven);
+            }
             if (needIO)
             {
                 // A more recent version of the key was not (yet) found and we need another IO to continue searching.
@@ -316,7 +323,7 @@ namespace Tsavorite.core
             {
                 // A more recent version of the key was not found, so push the original record (with its originalAddress).
                 RecordMetadata recordMetadata = new(originalAddress);
-                _ = afterIo ? Interlocked.Increment(ref scanPushedAfterIo) : Interlocked.Increment(ref scanPushedNoIo);
+                if (!unproven) _ = afterIo ? Interlocked.Increment(ref scanPushedAfterIo) : Interlocked.Increment(ref scanPushedNoIo);
 
                 epoch.Suspend();
                 try
@@ -343,12 +350,12 @@ namespace Tsavorite.core
             return sessionFunctions.Store.HandleOperationStatus(sessionFunctions.Ctx, ref operationState, internalStatus, out _);
         }
 
-        internal long scanPushedNoIo, scanPushedAfterIo, scanSuperseded, scanIoIssued, scanChainRereads;
+        internal long scanPushedNoIo, scanPushedAfterIo, scanSuperseded, scanIoIssued, scanChainRereads, scanPushedUnproven;
 
         /// <summary>How this log's conditional scans (ScanCursor) decided each record's liveness, and the IOs it cost.</summary>
         public ScanLivenessCounts ScanLiveness =>
             new(Interlocked.Read(ref scanPushedNoIo), Interlocked.Read(ref scanPushedAfterIo), Interlocked.Read(ref scanSuperseded),
-                Interlocked.Read(ref scanIoIssued), Interlocked.Read(ref scanChainRereads));
+                Interlocked.Read(ref scanIoIssued), Interlocked.Read(ref scanChainRereads), Interlocked.Read(ref scanPushedUnproven));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static OperationStatus PrepareIOForConditionalScan<TInput, TOutput, TContext, TSourceLogRecord, TSessionFunctionsWrapper>(

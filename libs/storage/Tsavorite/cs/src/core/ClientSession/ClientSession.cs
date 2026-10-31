@@ -528,11 +528,16 @@ namespace Tsavorite.core
         /// <returns>True if Scan completed and pushed <paramref name="count"/> records and there may be more records; false if Scan ended early due to finding less than <paramref name="count"/> records
         /// or one of the TScanIterator reader functions returning false, or if we determined that there are no records remaining. In other words, if this returns true,
         /// there may be more records satisfying the iteration criteria beyond <paramref name="count"/>.</returns>
+        /// <param name="pushUnproven">Push a record whose liveness needs a read instead of reading: the caller takes every record it is handed in
+        /// address order, so where a newer record of the key exists it is handed that too, and it wins.</param>
         public bool ScanCursor<TScanFunctions>(ref long cursor, long count, TScanFunctions scanFunctions, long endAddress = long.MaxValue, bool validateCursor = false,
-                long maxAddress = long.MaxValue, bool resetCursor = true, bool includeTombstones = false)
+                long maxAddress = long.MaxValue, bool resetCursor = true, bool includeTombstones = false, bool pushUnproven = false)
             where TScanFunctions : IScanIteratorFunctions
-            => store.hlogBase.ScanCursor(store, scanCursorState ??= new(), ref cursor, count, scanFunctions, endAddress, validateCursor, maxAddress,
+        {
+            (scanCursorState ??= new()).pushUnproven = pushUnproven;
+            return store.hlogBase.ScanCursor(store, scanCursorState, ref cursor, count, scanFunctions, endAddress, validateCursor, maxAddress,
                 resetCursor: resetCursor, includeTombstones: includeTombstones);
+        }
 
         /// <summary>
         /// Resume session on current thread. IMPORTANT: Call SuspendThread before any async op.

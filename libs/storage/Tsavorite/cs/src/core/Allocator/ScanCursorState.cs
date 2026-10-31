@@ -10,6 +10,7 @@ namespace Tsavorite.core
         internal bool endBatch;          // End the batch (but return a valid cursor for the next batch, as if "count" records had been returned)
         internal bool retryLastRecord;   // Retry the last record when returning a valid cursor
         internal bool stop;              // Stop the operation (as if all records in the db had been returned)
+        internal bool pushUnproven;      // Push a record whose liveness needs a read, instead of reading (set per call by ScanCursor)
 
         internal void Initialize(IScanIteratorFunctions scanIteratorFunctions)
         {
