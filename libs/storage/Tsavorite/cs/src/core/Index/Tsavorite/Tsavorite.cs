@@ -62,6 +62,9 @@ namespace Tsavorite.core
         /// <summary>The log's IO buffer pool: its budgets, and the buffers it made with and without a permit.</summary>
         public IoBufferCounts IoBuffers => hlogBase.bufferPool.Counts;
 
+        /// <summary>The log's IO buffer pool itself, for a host's gate that drives it from threads of its own. Not for use outside tests.</summary>
+        public SectorAlignedBufferPool IoBufferPoolForTest => hlogBase.bufferPool;
+
         /// <summary>How the log's conditional scans decided each record's liveness, and the IOs those decisions cost.</summary>
         public ScanLivenessCounts ScanLiveness => hlogBase.ScanLiveness;
 

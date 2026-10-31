@@ -99,6 +99,7 @@ namespace Tsavorite.core
         internal SectorAlignedBufferPool pool;      // identity check for a recycled thread-static slot; nulled on seal
         internal int state;                          // Alive / Sealed
         internal int drainedOnce;                    // CAS 0->1: arbitrates explicit seal vs. finalization (drain at most once)
+        internal int handBack;                       // 1: a spent budget asked; the owner drops its own stacks to HandBackKeep at its next Get or Return
 
         internal ThreadShard(SectorAlignedBufferPool pool, int numClasses, int sectorSize, int[] classCaps, bool bornSealed)
         {
@@ -279,6 +280,9 @@ namespace Tsavorite.core
         private long reclaimedBytes;                      // permits a spent budget took back from caches nobody asked
         private long lastReclaimTicks;                    // Environment.TickCount64 of the last sweep: at most one per ReclaimEveryMs
         private const long ReclaimEveryMs = 100;          // a miss between sweeps is made with no permit, as before, at the cost of one read
+        private const int HandBackKeep = 4;               // buffers a thread keeps per small class when a spent budget asks for the rest
+        private long handedBackBytes;                     // permits owners dropped from their own stacks when asked
+        private int handBackOpen;                         // 1: owners are asked; the first miss served with a permit withdraws the ask
         private const int ReclaimShare = 16;              // a sweep takes back at least a sixteenth of the budget, so sweeps stay rare
 
         private void InitOriginReturn()
@@ -374,6 +378,8 @@ namespace Tsavorite.core
             }
 
             var shard = GetOrCreateShard();
+            if (shard.handBack != 0)
+                HandBack(shard);
             var bucket = shard.buckets[cls];
 
             // 1. owner-only local stack (no atomics)
@@ -454,6 +460,8 @@ namespace Tsavorite.core
                 page.permitBytes = actual;
                 page.permitReleased = 0;
                 page.budget = b;
+                if (Volatile.Read(ref handBackOpen) != 0)
+                    WithdrawHandBack();
             }
             else
             {
@@ -467,8 +475,8 @@ namespace Tsavorite.core
 
         /// <summary>A spent budget takes back the permits of buffers no thread is asking for: those parked on any shard's cross-thread stack,
         /// those in the depot, and the asking thread's own stacks of other classes, until <paramref name="wanted"/> (and at least a
-        /// <see cref="ReclaimShare"/>th of the budget) is free. Another thread's own stack is its alone and is left. True if anything was
-        /// taken back.</summary>
+        /// <see cref="ReclaimShare"/>th of the budget) is free. Another thread's own stack is its alone: if that is not enough, each owner is asked to
+        /// hand its stacks back (<see cref="HandBack"/>). True if anything was taken back now.</summary>
         private bool ReclaimIdle(BudgetState budget, long wanted, ThreadShard self)
         {
             var now = Environment.TickCount64;
@@ -522,8 +530,53 @@ namespace Tsavorite.core
                     }
                 }
 
+
+            // 4. what the owners' own stacks hold: only an owner touches its stack, so each is asked, and drops all but HandBackKeep
+            // of each small class at its next Get or Return. The next miss after that finds the permits free.
+            if (freed < target)
+                foreach (var shard in live)
+                    if (!ReferenceEquals(shard, self) && Volatile.Read(ref shard.state) == ThreadShard.Alive)
+                    {
+                        Volatile.Write(ref shard.handBack, 1);
+                        Volatile.Write(ref handBackOpen, 1);
+                    }
+
             _ = Interlocked.Add(ref reclaimedBytes, freed);
             return freed > 0;
+        }
+
+        /// <summary>A miss was served with a permit: the owners not yet asked keep their stacks (rg 10-31: the ask is not left up).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void WithdrawHandBack()
+        {
+            if (Interlocked.CompareExchange(ref handBackOpen, 0, 1) != 1)
+                return;
+            lock (registryLock)
+                foreach (var wr in registry)
+                    if (wr.TryGetTarget(out var shard))
+                        Volatile.Write(ref shard.handBack, 0);
+        }
+
+        /// <summary>The owner, asked by a spent budget: drops all but <see cref="HandBackKeep"/> of each small class from its own stacks, releasing
+        /// their permits (mesh 10-31: the chunk store's 256 MB small budget sat on pool threads' own stacks, 99.5% of its buffers made with no permit).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void HandBack(ThreadShard shard)
+        {
+            Volatile.Write(ref shard.handBack, 0);
+            var freed = 0L;
+            for (var c = 0; c < firstLargeClass; c++)
+            {
+                var bucket = shard.buckets[c];
+                while (bucket.localCount > HandBackKeep && bucket.localHead is { } page)
+                {
+                    bucket.localHead = page.next;
+                    bucket.localCount--;
+                    bucket.localBytes -= page.permitBytes;
+                    freed += page.permitBytes;
+                    DropBuffer(page);
+                }
+            }
+            _ = Interlocked.Add(ref handedBackBytes, freed);
         }
 
         /// <summary>Allocate a bypass buffer sized exactly to the (rounded) request; never enters the cache.</summary>
@@ -610,6 +663,8 @@ namespace Tsavorite.core
             var slot = slotIndex;
             if (arr is not null && slot < arr.Length && ReferenceEquals(arr[slot], owner) && owner.state == ThreadShard.Alive)
             {
+                if (owner.handBack != 0)
+                    HandBack(owner);
                 PushLocal(bucket, page);
                 return;
             }
@@ -1083,7 +1138,25 @@ namespace Tsavorite.core
         internal long ReservedBytes => (smallBudget?.Used ?? 0) + (largeBudget?.Used ?? 0);
         /// <summary>The pool's budgets and what it has made; all zero in legacy mode.</summary>
         public IoBufferCounts Counts => new(smallBudget?.Used ?? 0, smallBudget?.budgetBytes ?? 0, largeBudget?.Used ?? 0, largeBudget?.budgetBytes ?? 0,
-            Interlocked.Read(ref totalManagedAllocations), Interlocked.Read(ref uncachedAllocations), Interlocked.Read(ref reclaimedBytes));
+            Interlocked.Read(ref totalManagedAllocations), Interlocked.Read(ref uncachedAllocations), Interlocked.Read(ref reclaimedBytes), LocalBytes,
+            Interlocked.Read(ref handedBackBytes));
+
+        // The owners' own stacks, read from here without their atomics: a gauge's reading, not a ledger.
+        private long LocalBytes
+        {
+            get
+            {
+                if (registry is null)
+                    return 0;
+                var bytes = 0L;
+                lock (registryLock)
+                    foreach (var wr in registry)
+                        if (wr.TryGetTarget(out var shard) && shard.buckets is { } buckets)
+                            foreach (var bucket in buckets)
+                                bytes += Volatile.Read(ref bucket.localBytes);
+                return bytes;
+            }
+        }
         /// <summary>Bytes reserved against the small-class sub-budget. Test-only.</summary>
         internal long SmallReservedBytes => smallBudget?.Used ?? 0;
         /// <summary>Bytes reserved against the large-class sub-budget. Test-only.</summary>

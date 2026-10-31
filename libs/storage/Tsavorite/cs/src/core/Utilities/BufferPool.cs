@@ -279,9 +279,10 @@ namespace Tsavorite.core
     /// <summary>A log's IO buffer pool: bytes reserved against each sub-budget and the budget, buffers ever made, and those made with no permit
     /// (the budget was spent or the request past the pooled ceiling), which the GC takes back on Return. A pool whose small budget is
     /// spent makes every small buffer anew: pinned churn, and the pinned heap's holes. Reclaimed is the bytes of permits a spent budget took
-    /// back from caches nobody asked.</summary>
+    /// back from caches nobody asked. LocalBytes is the permits parked on the threads' own stacks, which only their owners touch;
+    /// HandedBack is the bytes those owners dropped when a spent budget asked.</summary>
     public readonly record struct IoBufferCounts(long ReservedSmall, long BudgetSmall, long ReservedLarge, long BudgetLarge, long Made, long MadeUncached,
-        long Reclaimed);
+        long Reclaimed, long LocalBytes = 0, long HandedBack = 0);
 
     /// <summary>
     /// A pool of sector-aligned memory buffers.
