@@ -133,7 +133,19 @@ namespace Tsavorite.core
             headAddress = hlogBase.HeadAddress;
 
             if (currentAddress < hlogBase.BeginAddress && !assumeInMemory)
+            {
                 currentAddress = hlogBase.BeginAddress;
+
+                // Begin passed the end after GetNext checked the cursor against it. No frame is loaded at or past the end, so reading on
+                // would wait on a frame that never held begin's page: one never used has no completion event, one used before holds
+                // another page, whose records would come back as begin's.
+                if (currentAddress >= stopAddress)
+                {
+                    nextAddress = currentAddress;
+                    currentPage = default;
+                    return false;
+                }
+            }
 
             // If currentAddress < headAddress and we're not buffering and not guaranteeing the records are in memory, fail.
             if (frameSize == 0 && currentAddress < headAddress && !assumeInMemory)
