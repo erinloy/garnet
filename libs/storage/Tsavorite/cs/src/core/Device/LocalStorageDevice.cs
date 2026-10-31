@@ -36,6 +36,7 @@ namespace Tsavorite.core
         private readonly bool disableFileBuffering;
         private readonly bool writeThrough;
         private readonly SafeConcurrentDictionary<int, SafeFileHandle> logHandles;
+        private readonly Func<int, SafeFileHandle> createHandle, createExistingHandle;   // made once: a read or write asks for its handle
         private readonly bool useIoCompletionPort;
         private readonly ConcurrentQueue<SimpleAsyncResult> results;
         private readonly ConcurrentDictionary<int, int> heldSegments = new();
@@ -166,6 +167,8 @@ namespace Tsavorite.core
             this.readOnly = readOnly;
             this.logger = logger;
             results = new ConcurrentQueue<SimpleAsyncResult>();
+            createHandle = CreateHandle;
+            createExistingHandle = CreateExistingHandle;
 
             logHandles = initialLogFileHandles != null
                 ? new SafeConcurrentDictionary<int, SafeFileHandle>(initialLogFileHandles)
@@ -614,10 +617,10 @@ namespace Tsavorite.core
         /// <returns></returns>
         // Can be used to pre-load handles, e.g., after a checkpoint
         protected SafeFileHandle GetOrAddHandle(int _segmentId)
-            => GetOrAddHandle(_segmentId, CreateHandle);
+            => GetOrAddHandle(_segmentId, createHandle);
 
         private SafeFileHandle GetOrAddReadHandle(int _segmentId)
-            => GetOrAddHandle(_segmentId, CreateExistingHandle);
+            => GetOrAddHandle(_segmentId, createExistingHandle);
 
         protected SafeFileHandle GetOrAddHandle(int _segmentId, Func<int, SafeFileHandle> handleFactory)
         {

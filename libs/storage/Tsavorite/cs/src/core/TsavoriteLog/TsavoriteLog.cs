@@ -28,6 +28,7 @@ namespace Tsavorite.core
         readonly ILogCommitManager logCommitManager;
         readonly bool disposeLogCommitManager;
         readonly GetMemory getMemory;
+        readonly DeviceIOCompletionCallback asyncGetFromDiskCallback;   // made once: an instance method group makes a delegate at every use
         readonly int headerSize;
         readonly LogChecksumType logChecksum;
         readonly WorkQueueLIFO<CommitInfo> commitQueue;
@@ -207,6 +208,7 @@ namespace Tsavorite.core
         private TsavoriteLog(TsavoriteLogSettings logSettings, bool syncRecover, ILogger logger = null)
         {
             this.logger = logger;
+            asyncGetFromDiskCallback = AsyncGetFromDiskCallback;
             autoCommit = logSettings.AutoCommit;
             logCommitManager = logSettings.LogCommitManager ??
                 new DeviceLogCommitCheckpointManager
@@ -2511,7 +2513,7 @@ namespace Tsavorite.core
             };
             unsafe
             {
-                allocator.AsyncReadBlittableRecordToMemory(address, headerSize + estimatedLength, AsyncGetFromDiskCallback, ref ctx);
+                allocator.AsyncReadBlittableRecordToMemory(address, headerSize + estimatedLength, asyncGetFromDiskCallback, ref ctx);
             }
             epoch.Suspend();
             using (ctx.CancelledBy(token))
@@ -2543,7 +2545,7 @@ namespace Tsavorite.core
             };
             unsafe
             {
-                allocator.AsyncReadBlittableRecordToMemory(address, headerSize + estimatedLength, AsyncGetFromDiskCallback, ref ctx);
+                allocator.AsyncReadBlittableRecordToMemory(address, headerSize + estimatedLength, asyncGetFromDiskCallback, ref ctx);
             }
             epoch.Suspend();
             using (ctx.CancelledBy(token))
@@ -3063,7 +3065,7 @@ namespace Tsavorite.core
                     else
                     {
                         ctx.record.Return();
-                        allocator.AsyncReadBlittableRecordToMemory(ctx.logicalAddress, requiredBytes, AsyncGetFromDiskCallback, ref ctx);
+                        allocator.AsyncReadBlittableRecordToMemory(ctx.logicalAddress, requiredBytes, asyncGetFromDiskCallback, ref ctx);
                     }
                 }
             }
