@@ -276,6 +276,10 @@ namespace Tsavorite.core
         private int poolState;                            // PoolActive / PoolClosing / PoolClosed
         private long totalManagedAllocations;             // test-only reuse-efficiency counter
         private long uncachedAllocations;                 // buffers made with no permit (budget spent, or past the pooled ceiling): the GC's on Return
+        private long reclaimedBytes;                      // permits a spent budget took back from caches nobody asked
+        private long lastReclaimTicks;                    // Environment.TickCount64 of the last sweep: at most one per ReclaimEveryMs
+        private const long ReclaimEveryMs = 100;          // a miss between sweeps is made with no permit, as before, at the cost of one read
+        private const int ReclaimShare = 16;              // a sweep takes back at least a sixteenth of the budget, so sweeps stay rare
 
         private void InitOriginReturn()
         {
@@ -443,7 +447,8 @@ namespace Tsavorite.core
             // Reserve a persistent poolability permit unless the pool/shard is closing or the budget is exhausted.
             var actual = (long)page.buffer.Length;
             var b = BudgetFor(cls);
-            if (bucket.owner.state == ThreadShard.Alive && Volatile.Read(ref poolState) == PoolActive && b.TryReserve(actual))
+            if (bucket.owner.state == ThreadShard.Alive && Volatile.Read(ref poolState) == PoolActive
+                && (b.TryReserve(actual) || (ReclaimIdle(b, actual, bucket.owner) && b.TryReserve(actual))))
             {
                 page.cacheable = true;
                 page.permitBytes = actual;
@@ -458,6 +463,67 @@ namespace Tsavorite.core
             }
             Debug.Assert(bucket.classCapacityBytes >= RoundUp(required_bytes, sectorSize), "selected class capacity is smaller than the rounded request");
             return page;
+        }
+
+        /// <summary>A spent budget takes back the permits of buffers no thread is asking for: those parked on any shard's cross-thread stack,
+        /// those in the depot, and the asking thread's own stacks of other classes, until <paramref name="wanted"/> (and at least a
+        /// <see cref="ReclaimShare"/>th of the budget) is free. Another thread's own stack is its alone and is left. True if anything was
+        /// taken back.</summary>
+        private bool ReclaimIdle(BudgetState budget, long wanted, ThreadShard self)
+        {
+            var now = Environment.TickCount64;
+            var last = Volatile.Read(ref lastReclaimTicks);
+            if (now - last < ReclaimEveryMs || Interlocked.CompareExchange(ref lastReclaimTicks, now, last) != last)
+                return false;
+            var target = Math.Max(wanted, budget.budgetBytes / ReclaimShare);
+            var freed = 0L;
+            var (from, to) = ReferenceEquals(budget, largeBudget) ? (firstLargeClass, NumClasses) : (0, firstLargeClass);
+
+            // 1. returns parked on a shard's cross-thread stack: its owner takes them only when it asks the same class again. The claim is
+            // the owner's own whole-chain CAS, so whichever thread wins it holds the chain alone, and a sealed shard's stack is left alone.
+            List<ThreadShard> live;
+            lock (registryLock)
+            {
+                live = new List<ThreadShard>(registry.Count);
+                foreach (var wr in registry)
+                    if (wr.TryGetTarget(out var s))
+                        live.Add(s);
+            }
+            foreach (var shard in live)
+                for (var c = from; c < to && freed < target; c++)
+                    for (var page = ClaimCrossThread(shard.buckets[c]); page is not null;)
+                    {
+                        var next = page.next;
+                        freed += page.permitBytes;
+                        DropBuffer(page);
+                        page = next;
+                    }
+
+            // 2. the depot: a class there is one no thread asked since it spilled
+            for (var c = from; c < to && freed < target; c++)
+                while (freed < target && DepotPop(c) is { } page)
+                {
+                    freed += page.permitBytes;
+                    DropBuffer(page);
+                }
+
+            // 3. the asking thread's own stacks of other classes (owner-only, and this is the owner)
+            if (self is not null)
+                for (var c = from; c < to && freed < target; c++)
+                {
+                    var bucket = self.buckets[c];
+                    while (freed < target && bucket.localHead is { } page)
+                    {
+                        bucket.localHead = page.next;
+                        bucket.localCount--;
+                        bucket.localBytes -= page.permitBytes;
+                        freed += page.permitBytes;
+                        DropBuffer(page);
+                    }
+                }
+
+            _ = Interlocked.Add(ref reclaimedBytes, freed);
+            return freed > 0;
         }
 
         /// <summary>Allocate a bypass buffer sized exactly to the (rounded) request; never enters the cache.</summary>
@@ -1017,7 +1083,7 @@ namespace Tsavorite.core
         internal long ReservedBytes => (smallBudget?.Used ?? 0) + (largeBudget?.Used ?? 0);
         /// <summary>The pool's budgets and what it has made; all zero in legacy mode.</summary>
         public IoBufferCounts Counts => new(smallBudget?.Used ?? 0, smallBudget?.budgetBytes ?? 0, largeBudget?.Used ?? 0, largeBudget?.budgetBytes ?? 0,
-            Interlocked.Read(ref totalManagedAllocations), Interlocked.Read(ref uncachedAllocations));
+            Interlocked.Read(ref totalManagedAllocations), Interlocked.Read(ref uncachedAllocations), Interlocked.Read(ref reclaimedBytes));
         /// <summary>Bytes reserved against the small-class sub-budget. Test-only.</summary>
         internal long SmallReservedBytes => smallBudget?.Used ?? 0;
         /// <summary>Bytes reserved against the large-class sub-budget. Test-only.</summary>
