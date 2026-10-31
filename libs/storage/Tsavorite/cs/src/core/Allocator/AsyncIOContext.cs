@@ -4,6 +4,8 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Threading.Tasks.Sources;
 
 namespace Tsavorite.core
 {
@@ -202,10 +204,44 @@ namespace Tsavorite.core
         }
     }
 
-    internal sealed class SimpleReadContext
+    /// <summary>
+    /// One log read in flight, awaited as itself: no semaphore and no task per read. The device callback and a cancellation race to
+    /// complete it once; when cancellation wins, the callback that lands later returns the record it read.
+    /// </summary>
+    internal sealed class SimpleReadContext : IValueTaskSource
     {
         public long logicalAddress;
         public SectorAlignedMemory record;
-        public SemaphoreSlim completedRead;
+        private ManualResetValueTaskSourceCore<bool> core = new() { RunContinuationsAsynchronously = true };
+        private int completed;
+
+        /// <summary>Ends the wait if <paramref name="token"/> is cancelled first; the awaiter disposes it once the wait ends.</summary>
+        public CancellationTokenRegistration CancelledBy(CancellationToken token)
+            => token.CanBeCanceled ? token.UnsafeRegister(static (state, t) => ((SimpleReadContext)state).Cancel(t), this) : default;
+
+        public ValueTask WhenRead() => new(this, core.Version);
+
+        /// <summary>The device's answer (or its error, with <see cref="record"/> null) has landed.</summary>
+        public void Complete()
+        {
+            if (Interlocked.Exchange(ref completed, 1) == 0)
+            {
+                core.SetResult(true);
+                return;
+            }
+            record?.Return();
+            record = null;
+        }
+
+        private void Cancel(CancellationToken token)
+        {
+            if (Interlocked.Exchange(ref completed, 1) == 0)
+                core.SetException(new OperationCanceledException(token));
+        }
+
+        void IValueTaskSource.GetResult(short token) => core.GetResult(token);
+        ValueTaskSourceStatus IValueTaskSource.GetStatus(short token) => core.GetStatus(token);
+        void IValueTaskSource.OnCompleted(Action<object> continuation, object state, short token, ValueTaskSourceOnCompletedFlags flags)
+            => core.OnCompleted(continuation, state, token, flags);
     }
 }

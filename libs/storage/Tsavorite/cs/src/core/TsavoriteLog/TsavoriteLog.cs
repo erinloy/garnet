@@ -2495,6 +2495,7 @@ namespace Tsavorite.core
         /// <param name="estimatedLength">Estimated length of entry, if known</param>
         /// <param name="token">Cancellation token</param>
         /// <returns></returns>
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
         public async ValueTask<(byte[], int)> ReadAsync(long address, int estimatedLength = 0, CancellationToken token = default)
         {
             token.ThrowIfCancellationRequested();
@@ -2506,15 +2507,15 @@ namespace Tsavorite.core
             }
             var ctx = new SimpleReadContext
             {
-                logicalAddress = address,
-                completedRead = new SemaphoreSlim(0)
+                logicalAddress = address
             };
             unsafe
             {
                 allocator.AsyncReadBlittableRecordToMemory(address, headerSize + estimatedLength, AsyncGetFromDiskCallback, ref ctx);
             }
             epoch.Suspend();
-            await ctx.completedRead.WaitAsync(token).ConfigureAwait(false);
+            using (ctx.CancelledBy(token))
+                await ctx.WhenRead().ConfigureAwait(false);
             return GetRecordAndFree(ctx.record);
         }
 
@@ -2526,6 +2527,7 @@ namespace Tsavorite.core
         /// <param name="estimatedLength">Estimated length of entry, if known</param>
         /// <param name="token">Cancellation token</param>
         /// <returns></returns>
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
         public async ValueTask<(IMemoryOwner<byte>, int)> ReadAsync(long address, MemoryPool<byte> memoryPool, int estimatedLength = 0, CancellationToken token = default)
         {
             token.ThrowIfCancellationRequested();
@@ -2537,15 +2539,15 @@ namespace Tsavorite.core
             }
             var ctx = new SimpleReadContext
             {
-                logicalAddress = address,
-                completedRead = new SemaphoreSlim(0)
+                logicalAddress = address
             };
             unsafe
             {
                 allocator.AsyncReadBlittableRecordToMemory(address, headerSize + estimatedLength, AsyncGetFromDiskCallback, ref ctx);
             }
             epoch.Suspend();
-            await ctx.completedRead.WaitAsync(token).ConfigureAwait(false);
+            using (ctx.CancelledBy(token))
+                await ctx.WhenRead().ConfigureAwait(false);
             return GetRecordAsMemoryOwnerAndFree(ctx.record, memoryPool);
         }
 
@@ -2555,6 +2557,7 @@ namespace Tsavorite.core
         /// <param name="address">Logical address to read from</param>
         /// <param name="token">Cancellation token</param>
         /// <returns></returns>
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
         public async ValueTask<int> ReadRecordLengthAsync(long address, CancellationToken token = default)
         {
             token.ThrowIfCancellationRequested();
@@ -2566,15 +2569,15 @@ namespace Tsavorite.core
             }
             var ctx = new SimpleReadContext
             {
-                logicalAddress = address,
-                completedRead = new SemaphoreSlim(0)
+                logicalAddress = address
             };
             unsafe
             {
                 allocator.AsyncReadBlittableRecordToMemory(address, headerSize, AsyncGetHeaderOnlyFromDiskCallback, ref ctx);
             }
             epoch.Suspend();
-            await ctx.completedRead.WaitAsync(token).ConfigureAwait(false);
+            using (ctx.CancelledBy(token))
+                await ctx.WhenRead().ConfigureAwait(false);
             return GetRecordLengthAndFree(ctx.record);
         }
 
@@ -3036,7 +3039,7 @@ namespace Tsavorite.core
                 logger?.LogError($"{nameof(AsyncGetFromDiskCallback)} error: {{errorCode}}", errorCode);
                 ctx.record.Return();
                 ctx.record = null;
-                _ = ctx.completedRead.Release();
+                ctx.Complete();
             }
             else
             {
@@ -3048,14 +3051,14 @@ namespace Tsavorite.core
                     logger?.LogDebug("Invalid record length found: {length}", length);
                     ctx.record.Return();
                     ctx.record = null;
-                    _ = ctx.completedRead.Release();
+                    ctx.Complete();
                 }
                 else
                 {
                     var requiredBytes = headerSize + length;
                     if (ctx.record.available_bytes >= requiredBytes)
                     {
-                        _ = ctx.completedRead.Release();
+                        ctx.Complete();
                     }
                     else
                     {
@@ -3075,7 +3078,7 @@ namespace Tsavorite.core
                 logger?.LogError($"{nameof(AsyncGetHeaderOnlyFromDiskCallback)} error: {{errorCode}}", errorCode);
                 ctx.record.Return();
                 ctx.record = null;
-                _ = ctx.completedRead.Release();
+                ctx.Complete();
             }
             else
             {
@@ -3085,7 +3088,7 @@ namespace Tsavorite.core
                     ctx.record.Return();
                     ctx.record = null;
                 }
-                _ = ctx.completedRead.Release();
+                ctx.Complete();
             }
         }
 
