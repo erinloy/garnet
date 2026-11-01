@@ -423,7 +423,7 @@ namespace Tsavorite.core
                     DirectVirtualMemory.Clear((nint)state[resizeInfo.version].tableAligned, state[resizeInfo.version].size * sizeof(HashBucket));
                 }
             overflowBucketsAllocator.Dispose();
-            overflowBucketsAllocator = new MallocFixedPageSize<HashBucket>(logger);
+            overflowBucketsAllocator = NewOverflowAllocator();
 
             // Reset the hybrid log
             hlogBase.Reset();

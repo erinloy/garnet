@@ -100,7 +100,7 @@ namespace Tsavorite.core
             var size = state[from].size;
             var before = OverflowBucketCount;
             var begin = hlogBase.BeginAddress;
-            var fresh = new MallocFixedPageSize<HashBucket>();
+            var fresh = NewOverflowAllocator();
             Initialize(to, size, sectorSize);
             long entries = 0, below = 0;
             for (long j = 0; j < size; j++)

@@ -8,6 +8,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -47,6 +48,22 @@ namespace Tsavorite.core
 
         readonly ILogger logger;
 
+        // Direct-VM pages (a store whose settings say NativeHashIndex): each page is its own mapping, made when an allocation first
+        // needs it (an empty allocator maps nothing) and unmapped when a trim drops it or the allocator is disposed, or, while an
+        // overflow checkpoint write may read it, when that write drains. Managed pages are pinned arrays the pinned heap keeps.
+        private readonly bool native;
+        private readonly DirectVmBlock[] blocks;
+        private static readonly T[] NativePage = [];
+        private int disposed, pagesFreed;
+
+        /// <summary>Direct-VM overflow pages unmapped (a trim, a dispose, or a parked dispose's drain), and disposes parked under an
+        /// overflow checkpoint write: process-wide counts for tests.</summary>
+        internal static long NativePagesFreed, NativeDisposesParked;
+
+        // what a checkpoint writes for a level no allocation mapped (only the first, holding the reserved first chunk): zeros
+        private const int EmptyLevelBytes = 1 << 16;
+        private static nint emptyLevel;
+
 #if DEBUG
         private enum AllocationMode { None, Single, Bulk };
         private AllocationMode allocationMode;
@@ -63,16 +80,15 @@ namespace Tsavorite.core
         /// <summary>
         /// Create new instance
         /// </summary>
-        public unsafe MallocFixedPageSize(ILogger logger = null)
+        public unsafe MallocFixedPageSize(ILogger logger = null, bool native = false)
         {
             this.logger = logger;
             freeList = new ConcurrentQueue<long>();
-
-            values[0] = GC.AllocateArray<T>(PageSize + SectorSize, pinned: IsBlittable);
-            if (IsBlittable)
-            {
-                pointers[0] = (IntPtr)(((long)Unsafe.AsPointer(ref values[0][0]) + (SectorSize - 1)) & ~(SectorSize - 1));
-            }
+            this.native = native && IsBlittable;
+            if (this.native)
+                blocks = new DirectVmBlock[LevelSize];
+            else
+                NewPage(0);
 
             writeCacheLevel = -1;
             Interlocked.MemoryBarrier();
@@ -179,6 +195,11 @@ namespace Tsavorite.core
             }
             for (var i = Math.Max(keep + 1, 2); i < LevelSize && values[i] is not null; i++)
             {
+                if (native)
+                {
+                    Unmap(i);
+                    continue;
+                }
                 values[i] = null;
                 pointers[i] = IntPtr.Zero;
             }
@@ -232,14 +253,18 @@ namespace Tsavorite.core
             // Handle indexes in first batch specially because they do not use write cache.
             if (baseAddr == 0)
             {
+                // Direct-VM: the first two pages are mapped by the first allocation past the reserved chunk, not at construction.
+                if (native)
+                {
+                    if (index != 0)
+                        MapFirstPages();
+                    return index;
+                }
+
                 // If index 0, then allocate space for next level.
                 if (index == 0)
                 {
-                    var tmp = GC.AllocateArray<T>(PageSize + SectorSize, pinned: IsBlittable);
-                    if (IsBlittable)
-                        pointers[1] = (IntPtr)(((long)Unsafe.AsPointer(ref tmp[0]) + (SectorSize - 1)) & ~(SectorSize - 1));
-
-                    values[1] = tmp;
+                    NewPage(1);
                     Interlocked.MemoryBarrier();
                 }
 
@@ -281,13 +306,7 @@ namespace Tsavorite.core
                 Interlocked.MemoryBarrier();
 
                 // Allocate for next page
-                int newBaseAddr = baseAddr + 1;
-
-                var tmp = GC.AllocateArray<T>(PageSize + SectorSize, pinned: IsBlittable);
-                if (IsBlittable)
-                    pointers[newBaseAddr] = (IntPtr)(((long)Unsafe.AsPointer(ref tmp[0]) + (SectorSize - 1)) & ~(SectorSize - 1));
-
-                values[newBaseAddr] = tmp;
+                NewPage(baseAddr + 1);
 
                 Interlocked.MemoryBarrier();
             }
@@ -296,10 +315,99 @@ namespace Tsavorite.core
             return index;
         }
 
+        // A page's pointer is set before its array, which is what an allocation spinning on the level waits for.
+        private unsafe void NewPage(int level)
+        {
+            if (native)
+            {
+                var block = DirectVirtualMemory.Allocate((long)PageSize * RecordSize, SectorSize);
+                blocks[level] = block;
+                pointers[level] = block.AlignedPtr;
+                Volatile.Write(ref values[level], NativePage);
+                return;
+            }
+            var tmp = GC.AllocateArray<T>(PageSize + SectorSize, pinned: IsBlittable);
+            if (IsBlittable)
+                pointers[level] = (IntPtr)(((long)Unsafe.AsPointer(ref tmp[0]) + (SectorSize - 1)) & ~(SectorSize - 1));
+            values[level] = tmp;
+        }
+
+        private void MapFirstPages()
+        {
+            if (Volatile.Read(ref values[1]) is not null)
+                return;
+            lock (blocks)
+            {
+                if (values[1] is not null)
+                    return;
+                NewPage(0);
+                NewPage(1);
+                Interlocked.MemoryBarrier();
+            }
+        }
+
+        private void Unmap(int level)
+        {
+            var block = blocks[level];
+            blocks[level] = default;
+            values[level] = null;
+            pointers[level] = IntPtr.Zero;
+            DirectVirtualMemory.Free(block);
+            _ = Interlocked.Increment(ref NativePagesFreed);
+        }
+
+        private void UnmapAll()
+        {
+            if (Interlocked.Exchange(ref pagesFreed, 1) != 0)
+                return;
+            for (var i = 0; i < LevelSize; i++)
+                if (!blocks[i].IsEmpty)
+                    Unmap(i);
+        }
+
+        /// <summary>Bytes of the pages this allocator holds: pinned arrays, or direct-VM mappings.</summary>
+        internal long PageBytes
+        {
+            get
+            {
+                long pages = 0;
+                for (var i = 0; i < LevelSize && values[i] is not null; i++)
+                    pages++;
+                return pages * PageSize * RecordSize;
+            }
+        }
+
+        /// <summary>Whether the pages are direct-VM mappings.</summary>
+        internal bool IsNative => native;
+
         /// <summary>
-        /// Dispose
+        /// Dispose. A direct-VM allocator unmaps its pages now, or when the overflow checkpoint write still reading them drains.
         /// </summary>
-        public void Dispose() => count = 0;
+        public void Dispose()
+        {
+            count = 0;
+            if (!native)
+                return;
+            _ = Interlocked.Exchange(ref disposed, 1);
+            if (Volatile.Read(ref checkpointCallbackCount) == 0)
+                UnmapAll();
+            else
+                _ = Interlocked.Increment(ref NativeDisposesParked);
+        }
+
+        private static unsafe nint EmptyLevel(uint bytes)
+        {
+            if (bytes > EmptyLevelBytes)
+                throw new TsavoriteException($"an unmapped overflow level of {bytes} bytes is past the {EmptyLevelBytes}-byte empty level");
+            if (emptyLevel == 0)
+            {
+                var zeros = (nint)NativeMemory.AlignedAlloc(EmptyLevelBytes, 4096);
+                NativeMemory.Clear((void*)zeros, EmptyLevelBytes);
+                if (Interlocked.CompareExchange(ref emptyLevel, zeros, 0) != 0)
+                    NativeMemory.AlignedFree((void*)zeros);
+            }
+            return emptyLevel;
+        }
 
         /// <summary>Every allocated page's aligned start and byte length (blittable values only): what an index lock holds resident.</summary>
         internal void ForEachPage(Action<IntPtr, nint> page)
@@ -367,9 +475,10 @@ namespace Tsavorite.core
 
                 uint writeSize = (uint)((i == numCompleteLevels) ? (lastLevelSize + (sectorSize - 1)) & ~(sectorSize - 1) : alignedPageSize);
 
+                var source = pointers[i] != IntPtr.Zero ? pointers[i] : EmptyLevel(writeSize);
                 if (!useReadCache)
                 {
-                    device.WriteAsync(pointers[i], offset + numBytesWritten, writeSize, AsyncFlushCallback, result);
+                    device.WriteAsync(source, offset + numBytesWritten, writeSize, AsyncFlushCallback, result);
                 }
                 else
                 {
@@ -381,12 +490,12 @@ namespace Tsavorite.core
                         epoch.Resume();
                     }
 
-                    Buffer.MemoryCopy((void*)pointers[i], result.mem.aligned_pointer, writeSize, writeSize);
+                    Buffer.MemoryCopy((void*)source, result.mem.aligned_pointer, writeSize, writeSize);
                     int j = 0;
                     if (i == 0) j += AllocateChunkSize * RecordSize;
                     for (; j < writeSize; j += sizeof(HashBucket))
                     {
-                        skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)pointers[i] + j));
+                        skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)source + j));
                     }
 
                     if (prot) epoch.Suspend();
@@ -410,6 +519,8 @@ namespace Tsavorite.core
 
             if (Interlocked.Decrement(ref checkpointCallbackCount) == 0)
             {
+                if (native && Volatile.Read(ref disposed) == 1)
+                    UnmapAll();   // a dispose parked under this write
                 var err = checkpointErrorCode;
                 if (err != 0)
                     checkpointTcs.TrySetException(new TsavoriteException($"Overflow-bucket checkpoint flush failed with error code {err}"));
@@ -478,7 +589,10 @@ namespace Tsavorite.core
                 //read a full page
                 uint length = (uint)PageSize * (uint)RecordSize;
                 OverflowPagesReadAsyncResult result = default;
-                device.ReadAsync(offset + numBytesRead, pointers[i], length, AsyncPageReadCallback, result);
+                if (pointers[i] == IntPtr.Zero)
+                    recoveryCountdown.Decrement();   // a direct-VM level no allocation mapped held only the reserved first chunk
+                else
+                    device.ReadAsync(offset + numBytesRead, pointers[i], length, AsyncPageReadCallback, result);
                 numBytesRead += (i == numCompleteLevels) ? lastLevelSize : alignedPageSize;
             }
         }

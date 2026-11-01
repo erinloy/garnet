@@ -57,6 +57,12 @@ namespace Tsavorite.core
         /// process-wide native allocator) rather than a pinned managed array.</summary>
         public bool HashIndexIsNative => useNativeHashIndex;
 
+        /// <summary>An overflow allocator on this store's backend: direct-VM pages when the table is direct-VM.</summary>
+        internal MallocFixedPageSize<HashBucket> NewOverflowAllocator(ILogger logger = null) => new(logger ?? this.logger, native: useNativeHashIndex);
+
+        /// <summary>Bytes of the overflow allocator's pages (pinned arrays, or direct-VM mappings): what its buckets hold of the process.</summary>
+        public long IndexOverflowPageBytes => overflowBucketsAllocator.PageBytes;
+
         // Array used to denote if a specific chunk is merged or not
         internal long[] splitStatus;
 
@@ -91,7 +97,7 @@ namespace Tsavorite.core
             }
             else
                 this.epoch = epoch;
-            overflowBucketsAllocator = new MallocFixedPageSize<HashBucket>(logger);
+            overflowBucketsAllocator = NewOverflowAllocator(logger);
         }
 
         internal void Free()

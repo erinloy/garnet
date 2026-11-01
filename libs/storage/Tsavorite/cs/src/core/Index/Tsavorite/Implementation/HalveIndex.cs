@@ -75,7 +75,7 @@ namespace Tsavorite.core
             var oldSize = state[from].size;
             var half = oldSize / 2;
             var overflowBefore = OverflowBucketCount;
-            var merged = new MallocFixedPageSize<HashBucket>();
+            var merged = NewOverflowAllocator();
             Initialize(to, half, sectorSize);
             long entries = 0, duplicates = 0, suffixes = 0, collisions = 0;
             string first = null;
