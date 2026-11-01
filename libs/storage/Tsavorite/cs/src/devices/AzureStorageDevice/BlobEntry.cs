@@ -39,7 +39,7 @@ namespace Tsavorite.devices
         }
 
         /// <summary>
-        /// Creates a new BlobEntry to represent a page blob that will be created by <see cref="CreateAsync(long, BlobUtilsV12.PageBlobClients)"/>.
+        /// Creates a new BlobEntry to represent a page blob that will be created by <see cref="CreateAsync(long, BlobUtilsV12.PageBlobClients, bool)"/>.
         /// </summary>
         public BlobEntry(AzureStorageDevice azureStorageDevice)
         {
@@ -58,7 +58,7 @@ namespace Tsavorite.devices
         /// </summary>
         /// <param name="size">maximum size of the blob</param>
         /// <param name="pageBlob">The page blob to create</param>
-        public async Task CreateAsync(long size, BlobUtilsV12.PageBlobClients pageBlob)
+        public async Task CreateAsync(long size, BlobUtilsV12.PageBlobClients pageBlob, bool replace = false)
         {
             try
             {
@@ -77,7 +77,7 @@ namespace Tsavorite.devices
 
                         var response = await client.CreateAsync(
                         size: size,
-                        conditions: new Azure.Storage.Blobs.Models.PageBlobRequestConditions() { IfNoneMatch = Azure.ETag.All },
+                        conditions: replace ? null : new Azure.Storage.Blobs.Models.PageBlobRequestConditions() { IfNoneMatch = Azure.ETag.All },
                         cancellationToken: azureStorageDevice.StorageErrorHandler.Token).ConfigureAwait(false);
 
                         ETag = response.Value.ETag;

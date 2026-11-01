@@ -22,6 +22,9 @@ namespace Tsavorite.devices
     public class AzureStorageDevice : StorageDeviceBase
     {
         readonly ConcurrentDictionary<int, BlobEntry> blobs;
+        int[] recoveredSegments = [];
+        int[] passedOver = [];
+        readonly ConcurrentDictionary<int, byte> replaceOnCreate = new();
         readonly BlobUtilsV12.BlobDirectory pageBlobDirectory;
         readonly string blobName;
         readonly bool underLease;
@@ -226,6 +229,7 @@ namespace Tsavorite.devices
 
                 // find longest contiguous sequence at end
                 var keys = blobs.Keys.ToList();
+                recoveredSegments = [.. keys.Order()];
                 if (keys.Count == 0)
                 {
                     // nothing has been written to this device so far.
@@ -236,13 +240,9 @@ namespace Tsavorite.devices
                 {
                     keys.Sort();
                     endSegment = startSegment = keys[keys.Count - 1];
-                    for (int i = keys.Count - 2; i >= 0; i--)
-                    {
-                        if (keys[i] == keys[i + 1] - 1)
-                        {
-                            startSegment = i;
-                        }
-                    }
+                    // The run ends at the first gap below the highest blob: startSegment is a segment number, not an index into keys.
+                    for (int i = keys.Count - 2; i >= 0 && keys[i] == keys[i + 1] - 1; i--)
+                        startSegment = keys[i];
                 }
 
                 BlobManager?.StorageTracer?.TsavoriteStorageProgress($"StorageOpReturned AzureStorageDevice.StartAsync, determined segment range for {pageBlobDirectory.Prefix}{blobName}: start={startSegment} end={endSegment}");
@@ -254,6 +254,42 @@ namespace Tsavorite.devices
             }
         }
 
+
+        /// <summary>
+        /// THE CHECKPOINT PROVES WHICH RUN IS THE LOG (Ziltch prod 11-01: 33 page blobs of a September life, hlog.68 to hlog.131071, sat above
+        /// the live run 7..59; the listing took them, so the log's first write to segment 68 would have gone into a blob whose unwritten pages
+        /// still held that life's records). The run of listed segments holding <paramref name="firstSegment"/> through <paramref name="lastSegment"/>
+        /// is taken as the log's extent. Every listed segment outside it is passed over: never read, and a segment above it is replaced by an
+        /// empty page blob on its first write rather than written into. A gap inside the run refuses, as before.
+        /// </summary>
+        public override bool AdoptSegmentRunHolding(int firstSegment, int lastSegment)
+        {
+            var listed = recoveredSegments;
+            var at = Array.BinarySearch(listed, firstSegment);
+            if (at < 0)
+                return false;
+            int from = at, to = at;
+            while (from > 0 && listed[from - 1] == listed[from] - 1)
+                from--;
+            while (to + 1 < listed.Length && listed[to + 1] == listed[to] + 1)
+                to++;
+            if (listed[to] < lastSegment)
+                return false;
+            var strays = listed[..from].Concat(listed[(to + 1)..]).ToArray();
+            startSegment = listed[from];
+            endSegment = listed[to];
+            foreach (var segment in strays)
+            {
+                _ = blobs.TryRemove(segment, out _);
+                if (segment > listed[to])
+                    _ = replaceOnCreate.TryAdd(segment, 0);
+            }
+            passedOver = strays;
+            return true;
+        }
+
+        /// <inheritdoc/>
+        public override IReadOnlyList<int> SegmentsPassedOver => passedOver;
 
         /// <summary>
         /// Is called on exceptions, if non-null; can be set by application
@@ -473,7 +509,7 @@ namespace Tsavorite.devices
 
                     // If no blob exists for the segment, we must first create the segment asynchronouly. (Create call takes ~70 ms by measurement)
                     // After creation is done, we can call read.
-                    _ = entry.CreateAsync(size, pageBlob);
+                    _ = entry.CreateAsync(size, pageBlob, replaceOnCreate.TryRemove(segmentId, out _));
                 }
                 // Otherwise, some other thread beat us to it. Okay to use their blobs.
                 blobEntry = blobs[segmentId];
@@ -555,7 +591,7 @@ namespace Tsavorite.devices
 
                     // If no blob exists for the segment, we must first create the segment asynchronouly. (Create call takes ~70 ms by measurement)
                     // After creation is done, we can call write.
-                    var createTask = entry.CreateAsync(size, pageBlob);
+                    var createTask = entry.CreateAsync(size, pageBlob, replaceOnCreate.TryRemove(segmentId, out _));
                     // On creation failure, remove the entry so the next write retries creation.
                     createTask.ContinueWith(t =>
                     {
