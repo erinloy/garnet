@@ -198,6 +198,7 @@ namespace Tsavorite.core
                     }
                     copy.InfoRef.UnsealAndValidate();
                 }
+                OneWord(state[resizeInfo.version].tableAligned + (side == pair.Low ? pair.Low + half : pair.Low), onto, joined.word);
                 return new(HalvingJoinOutcome.Joined, count, bytes);
             }
             finally

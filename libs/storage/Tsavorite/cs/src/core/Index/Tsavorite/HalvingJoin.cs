@@ -8,7 +8,8 @@ namespace Tsavorite.core
     /// <summary>What <c>JoinHalvingPair</c> did with one same-tag pair.</summary>
     public enum HalvingJoinOutcome
     {
-        /// <summary>One side's newest record of each of its keys was copied to the tail, chained onto the other side's head, and its entry swapped to the copies.</summary>
+        /// <summary>One side's newest record of each of its keys was copied to the tail, chained onto the other side's head, and its entry swapped to the
+        /// copies; the other side's entry too, while it still holds the head the copies were chained onto.</summary>
         Joined,
         /// <summary>A writer moved the copied side's entry between the walk and the swap: the copies stay invalid, and the next ask joins again.</summary>
         Raced,
@@ -111,12 +112,22 @@ namespace Tsavorite.core
                     }
                     copy.InfoRef.UnsealAndValidate();
                 }
+                OneWord(copyLow ? high : low, onto, joined.word);
                 return new(HalvingJoinOutcome.Joined, count, bytes);
             }
             finally
             {
                 if (protect) epoch.Suspend();
             }
+        }
+
+        // Both sides of a joined pair hold one word, so a write to either keeps the other a suffix of it, and copies that leave memory never part the
+        // pair again (mesh 11-01: the pairs left rose 1,651 -> 2,449 in 4 min while ~620 joined a pass). A writer that moved the other side keeps its write.
+        private unsafe void OneWord(HashBucket* other, long onto, long joined)
+        {
+            var slot = EntryHolding(other, onto);
+            if (slot != null)
+                _ = Interlocked.CompareExchange(ref *slot, joined, onto);
         }
 
         // The copies made so far stay sealed and invalid: no chain reaches them and a scan skips them.

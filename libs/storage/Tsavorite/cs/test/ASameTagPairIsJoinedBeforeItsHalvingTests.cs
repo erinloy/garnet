@@ -156,7 +156,8 @@ namespace Tsavorite.test
             var (low, high) = Pairs(size, 1).Single();
             foreach (var i in low.Concat(high)) Write(context, i, 0);
             ClassicAssert.AreEqual(HalvingJoinOutcome.Joined, JoinAll().Single().Outcome);
-            Write(context, high[0], 1);   // the high side's head moves past the join's copies, or the low side's onto the copies
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);   // each write makes a new record: a copy updated in place parts nothing
+            Write(context, high[0], 1);   // both sides' heads move past the joined word, each onto its own record
             Write(context, low[0], 1);
             var refused = await store.HalveIndexAsync();
             ClassicAssert.IsFalse(refused.Halved, "a side written after its join is no longer a suffix: the barrier refuses it");
