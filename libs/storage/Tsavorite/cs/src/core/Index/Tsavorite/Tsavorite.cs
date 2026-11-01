@@ -184,7 +184,7 @@ namespace Tsavorite.core
         /// <param name="storeFunctions">Store-level user function implementations</param>
         /// <param name="allocatorFactory">Func to call to create the allocator(s, if doing readcache)</param>
         public TsavoriteKV(KVSettings kvSettings, TStoreFunctions storeFunctions, Func<AllocatorSettings, TStoreFunctions, TAllocator> allocatorFactory)
-            : base(kvSettings.Epoch, kvSettings.logger ?? kvSettings.loggerFactory?.CreateLogger("TsavoriteKV Index Overflow buckets"))
+            : base(kvSettings.Epoch, kvSettings.logger ?? kvSettings.loggerFactory?.CreateLogger("TsavoriteKV Index Overflow buckets"), kvSettings.NativeHashIndex)
         {
             try
             {

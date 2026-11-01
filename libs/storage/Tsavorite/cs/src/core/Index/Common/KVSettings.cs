@@ -22,6 +22,14 @@ namespace Tsavorite.core
         public long IndexSize = 1L << 26;
 
         /// <summary>
+        /// The hash table lives in direct virtual memory (mmap/VirtualAlloc) for this store, whatever the process-wide
+        /// <see cref="NativeAllocatorInitializer"/> says of log pages and frames. A table a resize retires is unmapped at once, or when the
+        /// index-checkpoint write that may read it drains; a pinned managed table's bytes stay committed in the pinned heap instead.
+        /// A table that cannot be mapped fails the store's construction: there is no managed fallback.
+        /// </summary>
+        public bool NativeHashIndex = false;
+
+        /// <summary>
         /// Device used for main hybrid log
         /// </summary>
         public IDevice LogDevice;

@@ -36,7 +36,7 @@ namespace Tsavorite.core
         // rather than in <see cref="state"/> (which is set to default on grow-completion) so the pointer to free
         // survives. See DirectVmBlockOwner for the retire/park/drain protocol; RetireNativeIndexTable and
         // Begin/EndNativeIndexCheckpointIo below are this store's uses of it.
-        readonly DirectVmBlockOwner nativeIndex = NativeAllocatorInitializer.Enabled ? new DirectVmBlockOwner(blockCount: 2) : null;
+        readonly DirectVmBlockOwner nativeIndex;
 
         /// <summary>Diagnostic counter of superseded direct-VM hash-index tables freed deterministically (on grow,
         /// or when an index-checkpoint write drains); used by tests to assert the prompt-free path is exercised.</summary>
@@ -52,6 +52,10 @@ namespace Tsavorite.core
         // (GarnetServer.Initialize) and never changes it, but test fixtures do flip it between runs in a single
         // process, so capturing keeps this index on the backend that was in effect when the store was built.
         bool useNativeHashIndex => nativeIndex is not null;
+
+        /// <summary>Whether this store's hash table is in direct virtual memory (<see cref="KVSettings.NativeHashIndex"/>, or the
+        /// process-wide native allocator) rather than a pinned managed array.</summary>
+        public bool HashIndexIsNative => useNativeHashIndex;
 
         // Array used to denote if a specific chunk is merged or not
         internal long[] splitStatus;
@@ -77,8 +81,9 @@ namespace Tsavorite.core
         /// <summary>
         /// Constructor
         /// </summary>
-        public TsavoriteBase(LightEpoch epoch = null, ILogger logger = null)
+        public TsavoriteBase(LightEpoch epoch = null, ILogger logger = null, bool nativeHashIndex = false)
         {
+            nativeIndex = NativeAllocatorInitializer.Enabled || nativeHashIndex ? new DirectVmBlockOwner(blockCount: 2) : null;
             if (epoch == null)
             {
                 this.epoch = new LightEpoch();
