@@ -491,6 +491,9 @@ namespace Tsavorite.core
             // Step 1: Write the new record's RecordInfo (Invalid set) FIRST.
             var newRecInfo = RecordInfo.InitialValid;
             newRecInfo.SetInvalid();
+            // Hygiene: a zero word reads as IsNull, which a read-cache eviction walk takes for a page's unused tail. The split-off record names
+            // no chain, so it carries kTempInvalidAddress as an abandoned read-cache record does and is never mistaken for padding.
+            newRecInfo.PreviousAddress = LogAddress.kTempInvalidAddress;
             *(RecordInfo*)newRecordAddress = newRecInfo;
 
             // Step 2: Build and write the new record's RDH (inline keys/values, no optionals, KeyLength=0, ValueLength as computed).

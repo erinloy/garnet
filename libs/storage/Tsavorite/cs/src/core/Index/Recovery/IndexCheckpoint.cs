@@ -150,13 +150,20 @@ namespace Tsavorite.core
                                 prot = true;
                                 epoch.Resume();
                             }
-                            Buffer.MemoryCopy((void*)chunkStartBucket, result.mem.aligned_pointer, chunkSize, chunkSize);
-                            for (int j = 0; j < chunkSize; j += sizeof(HashBucket))
+                            try
                             {
-                                skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)chunkStartBucket + j));
+                                Buffer.MemoryCopy((void*)chunkStartBucket, result.mem.aligned_pointer, chunkSize, chunkSize);
+                                for (int j = 0; j < chunkSize; j += sizeof(HashBucket))
+                                {
+                                    skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)chunkStartBucket + j));
+                                }
                             }
-                            if (prot)
-                                epoch.Suspend();
+                            finally
+                            {
+                                // A ReadCacheChainLostException leaves through FlushRunner's catch; the epoch must not stay held.
+                                if (prot)
+                                    epoch.Suspend();
+                            }
 
                             BeginNativeIndexCheckpointIo();
                             try

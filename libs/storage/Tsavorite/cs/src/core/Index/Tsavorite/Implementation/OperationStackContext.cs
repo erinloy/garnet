@@ -16,6 +16,10 @@ namespace Tsavorite.core
         internal HashEntryInfo hei;
         internal RecordSource<TStoreFunctions, TAllocator> recSrc;
 
+        /// <summary>The read cache's ClosedUntilAddress read after this operation waited out a close; a read-cache link below it is one the
+        /// eviction missed. 0 until the first wait.</summary>
+        internal long readCacheClosedSeen;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal OperationStackContext(long keyHash) => hei = new(keyHash);
 

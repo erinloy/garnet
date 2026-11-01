@@ -490,15 +490,27 @@ namespace Tsavorite.core
                         epoch.Resume();
                     }
 
-                    Buffer.MemoryCopy((void*)source, result.mem.aligned_pointer, writeSize, writeSize);
-                    int j = 0;
-                    if (i == 0) j += AllocateChunkSize * RecordSize;
-                    for (; j < writeSize; j += sizeof(HashBucket))
+                    try
                     {
-                        skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)source + j));
+                        Buffer.MemoryCopy((void*)source, result.mem.aligned_pointer, writeSize, writeSize);
+                        int j = 0;
+                        if (i == 0) j += AllocateChunkSize * RecordSize;
+                        for (; j < writeSize; j += sizeof(HashBucket))
+                        {
+                            skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)source + j));
+                        }
                     }
-
-                    if (prot) epoch.Suspend();
+                    catch (ReadCacheChainLostException ex)
+                    {
+                        // The checkpoint fails through its task, as the main index's FlushRunner does; levels not yet issued are never written.
+                        result.mem.Dispose();
+                        _ = checkpointTcs.TrySetException(ex);
+                        return;
+                    }
+                    finally
+                    {
+                        if (prot) epoch.Suspend();
+                    }
 
                     device.WriteAsync((IntPtr)result.mem.aligned_pointer, offset + numBytesWritten, writeSize, AsyncFlushCallback, result);
                 }

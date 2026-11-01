@@ -1,7 +1,9 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -106,7 +108,16 @@ namespace Tsavorite.core
             var logicalAddress = AbsoluteAddress(stackCtx.recSrc.LatestLogicalAddress);
             if (logicalAddress < readcacheBase.HeadAddress)
             {
+                // A link read after this walk saw its record's close complete is one the eviction missed: waiting cannot unlink it, and the
+                // retry loop that followed it here would never end (the Ziltch broker's readers spun in it on 10-30). Count it and throw.
+                if (logicalAddress < stackCtx.readCacheClosedSeen)
+                    ThrowReadCacheChainLost(logicalAddress, ReadCacheChainLostException.ReadWalker);
+
                 SpinWaitUntilRecordIsClosed(logicalAddress, readcacheBase);
+
+                // The close of logicalAddress has completed, and a close unlinks before it moves ClosedUntilAddress. Every link read from here on
+                // that is below this value is dangling.
+                stackCtx.readCacheClosedSeen = Volatile.Read(ref readcacheBase.ClosedUntilAddress);
 
                 // Restore to hlog; we may have set readcache into Log and continued the loop, had to restart, and the matching readcache record was evicted.
                 stackCtx.UpdateRecordSourceToCurrentHashEntry(hlogBase);
@@ -177,6 +188,7 @@ namespace Tsavorite.core
                 if (!entry->IsReadCache) continue;
 
                 var copiedTag = entry->Tag;
+                var closedSeen = 0L;
                 while (true)
                 {
                     var logicalAddress = entry->Address;
@@ -188,8 +200,14 @@ namespace Tsavorite.core
                         break;
                     }
 
+                    // As in ReadCacheNeedToWaitForEviction: a link read from the live slot after this walk saw its close complete is dangling,
+                    // and the rewalk would spin on it forever with the checkpoint held open.
+                    if (AbsoluteAddress(logicalAddress) < closedSeen)
+                        ThrowReadCacheChainLost(AbsoluteAddress(logicalAddress), ReadCacheChainLostException.CheckpointWalker);
+
                     _ = Interlocked.Increment(ref checkpointClosedReadCacheRewalks);
                     SpinWaitUntilRecordIsClosed(AbsoluteAddress(logicalAddress), readcacheBase);
+                    closedSeen = Volatile.Read(ref readcacheBase.ClosedUntilAddress);
                     // The live slot is this key's only while it carries the copied tag. A close that unlinked a cached absence leaves address 0,
                     // below begin, and another key's FindOrCreateTag may reclaim the slot: then this key has no record, and the copied slot is
                     // emptied rather than given the other key's word, which replay restores (frontier, rg 10-29).
@@ -208,7 +226,32 @@ namespace Tsavorite.core
             }
         }
 
-        long checkpointClosedReadCacheRewalks, checkpointRewalkTagMoved;
+        long checkpointClosedReadCacheRewalks, checkpointRewalkTagMoved, readCacheMissedEvictions;
+
+        /// <summary>Read-cache links met below ClosedUntilAddress after their close completed: records the eviction left linked. Each one
+        /// threw <see cref="ReadCacheChainLostException"/>.</summary>
+        public long ReadCacheMissedEvictions => Interlocked.Read(ref readCacheMissedEvictions);
+
+        /// <summary>Called on every missed eviction, before the throw, with the running count and the walker
+        /// (<see cref="ReadCacheChainLostException.ReadWalker"/> or <see cref="ReadCacheChainLostException.CheckpointWalker"/>).
+        /// It runs on the walking thread, under the epoch and possibly a bucket lock: it must not block or touch the store.</summary>
+        public Action<long, string> ReadCacheChainLost;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [DoesNotReturn]
+        void ThrowReadCacheChainLost(long absoluteAddress, string walker)
+        {
+            var count = Interlocked.Increment(ref readCacheMissedEvictions);
+            try
+            {
+                ReadCacheChainLost?.Invoke(count, walker);
+            }
+            catch
+            {
+                // The observer's fault must not replace the named exception.
+            }
+            throw new ReadCacheChainLostException(absoluteAddress, Volatile.Read(ref readcacheBase.ClosedUntilAddress), walker, count);
+        }
 
         /// <summary>Of those rewalks, the slots another key had reclaimed by then: the copied key had no record left.</summary>
         public long CheckpointRewalkTagMoved => Interlocked.Read(ref checkpointRewalkTagMoved);
