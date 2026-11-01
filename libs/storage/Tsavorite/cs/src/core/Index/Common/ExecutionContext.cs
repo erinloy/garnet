@@ -153,6 +153,7 @@ namespace Tsavorite.core
                 }
             }
 
+            [System.Runtime.CompilerServices.AsyncMethodBuilder(typeof(System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder))]
             public async ValueTask WaitPendingAsync(CancellationToken token = default)
             {
                 if (SyncIoPendingCount > 0)

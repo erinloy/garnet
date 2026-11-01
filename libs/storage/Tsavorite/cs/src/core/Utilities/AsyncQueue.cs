@@ -148,6 +148,7 @@ namespace Tsavorite.core
             return WaitForEntryAsyncSlow(token);
         }
 
+        [System.Runtime.CompilerServices.AsyncMethodBuilder(typeof(System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder))]
         private async ValueTask WaitForEntryAsyncSlow(CancellationToken token)
         {
             _ = Interlocked.Increment(ref waiterCount);
