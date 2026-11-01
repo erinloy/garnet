@@ -166,6 +166,16 @@ namespace Tsavorite.core
             request.ResetReadFaultState();
         }
 
+        /// <summary>Prepares a read of whatever valid record is at <paramref name="logicalAddress"/>, any key: an invalid one is passed over to its previous.</summary>
+        internal void PrepareAtAddress(long logicalAddress)
+        {
+            request.DisposeRecord();
+            request.requestKey.Dispose();
+            request.requestKey = default;
+            request.logicalAddress = logicalAddress;
+            request.ResetReadFaultState();
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void Set(AsyncIOContext ctx)
         {
