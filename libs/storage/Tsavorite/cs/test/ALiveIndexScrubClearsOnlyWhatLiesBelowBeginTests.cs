@@ -118,8 +118,10 @@ namespace Tsavorite.test
                 ClassicAssert.AreEqual((below, 0L), (cleared, lost), "alone, the scrub clears exactly what lay below begin");
             else
                 ClassicAssert.LessOrEqual(cleared, below, "beside a writer, an insert may reuse an entry first; the scrub never clears more");
-            ClassicAssert.AreEqual(new IndexScrubStep(0, 0, store.IndexSize, true, false), store.ScrubEntriesBelowBegin(0, store.IndexSize),
+            var again = store.ScrubEntriesBelowBegin(0, store.IndexSize);
+            ClassicAssert.AreEqual(new IndexScrubStep(0, 0, store.IndexSize, true, false), again with { Standing = 0 },
                 "a second pass, or a step re-run after a kill, finds nothing to clear");
+            ClassicAssert.Greater(again.Standing, 0, "the entries at or above begin are still counted as standing");
 
             for (var i = 0; i < Keys; i++)
             {

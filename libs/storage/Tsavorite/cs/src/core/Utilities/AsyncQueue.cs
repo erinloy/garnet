@@ -1,10 +1,12 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Sources;
 
 namespace Tsavorite.core
 {
@@ -26,6 +28,12 @@ namespace Tsavorite.core
     {
         private readonly SemaphoreSlim semaphore;
         private readonly ConcurrentQueue<T> queue;
+
+        /// <summary>
+        /// The one async waiter a session has at a time waits here, on a reused source, not on the semaphore: a semaphore wait with a
+        /// token made a task node, its async box and a cancellation promise per wait (Ziltch mesh broker 11-01: ~200 MB in 30 s).
+        /// </summary>
+        private readonly EntryWaiter slot = new();
 
         /// <summary>
         /// Number of callers currently blocked in <see cref="WaitForEntry"/> /
@@ -73,6 +81,7 @@ namespace Tsavorite.core
             // is bumped by the same full-fence Tail CAS and so is safe with or
             // without this barrier; we add it once for all consumers.
             Interlocked.MemoryBarrier();
+            slot.TryWake();
             // Skip the semaphore release when nobody is waiting (the common polling-path
             // case). The check is racy by design: a waiter that increments waiterCount
             // after this read still re-checks the queue Count on its own side and returns
@@ -151,6 +160,25 @@ namespace Tsavorite.core
         [System.Runtime.CompilerServices.AsyncMethodBuilder(typeof(System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder))]
         private async ValueTask WaitForEntryAsyncSlow(CancellationToken token)
         {
+            if (slot.TryArm(token))
+            {
+                CancellationTokenRegistration cancel = default;
+                try
+                {
+                    // Armed before this re-check, so a producer that enqueued before it is seen here and one after it wakes the slot.
+                    if (queue.Count > 0 && slot.TryWakeSelf())
+                        return;
+                    if (token.CanBeCanceled)
+                        cancel = token.UnsafeRegister(static s => ((EntryWaiter)s).TryCancel(), slot);
+                    await slot.Wait().ConfigureAwait(false);
+                }
+                finally
+                {
+                    cancel.Dispose();   // waits out a running cancel, so it never reaches the next arm
+                    slot.Disarm();
+                }
+                return;
+            }
             _ = Interlocked.Increment(ref waiterCount);
             try
             {
@@ -173,6 +201,58 @@ namespace Tsavorite.core
         public bool TryDequeue(out T item)
         {
             return queue.TryDequeue(out item);
+        }
+
+        /// <summary>
+        /// A reused wait: armed by one waiter at a time, woken once by whichever of a producer, the waiter's own re-check or its token
+        /// moves it from armed first.
+        /// </summary>
+        private sealed class EntryWaiter : IValueTaskSource
+        {
+            private const int Idle = 0, Armed = 1, Woken = 2;
+            private ManualResetValueTaskSourceCore<bool> core = new() { RunContinuationsAsynchronously = true };
+            private int phase, busy;
+            private CancellationToken token;
+
+            internal bool TryArm(CancellationToken token)
+            {
+                if (Interlocked.CompareExchange(ref busy, 1, 0) != 0)
+                    return false;
+                core.Reset();
+                this.token = token;
+                _ = Interlocked.Exchange(ref phase, Armed);   // a full fence before the waiter's re-check of the queue
+                return true;
+            }
+
+            internal void Disarm()
+            {
+                Volatile.Write(ref phase, Idle);
+                Volatile.Write(ref busy, 0);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal void TryWake()
+            {
+                if (Volatile.Read(ref phase) == Armed && Interlocked.CompareExchange(ref phase, Woken, Armed) == Armed)
+                    core.SetResult(true);
+            }
+
+            internal bool TryWakeSelf() => Interlocked.CompareExchange(ref phase, Woken, Armed) == Armed;
+
+            internal void TryCancel()
+            {
+                if (Interlocked.CompareExchange(ref phase, Woken, Armed) == Armed)
+                    core.SetException(new OperationCanceledException(token));
+            }
+
+            internal ValueTask Wait() => new(this, core.Version);
+
+            void IValueTaskSource.GetResult(short version) => core.GetResult(version);
+
+            ValueTaskSourceStatus IValueTaskSource.GetStatus(short version) => core.GetStatus(version);
+
+            void IValueTaskSource.OnCompleted(Action<object> continuation, object state, short version, ValueTaskSourceOnCompletedFlags flags)
+                => core.OnCompleted(continuation, state, version, flags);
         }
     }
 }

@@ -4,6 +4,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Garnet.test;
 using NUnit.Framework;
@@ -20,6 +21,7 @@ namespace Tsavorite.test
     /// Ziltch mesh broker 11-01 (optimized IL, 30 s): the awaits under a session's CompletePendingWithOutputsAsync made 5 async boxes per
     /// pending read (the outputs' wait, the session's, the store's, the context's WaitPendingAsync and the queue's WaitForEntryAsyncSlow),
     /// ~200 MB of 3.4 GB. Each rents its box from a pool now. Mutant: the boxes are made per wait (a read that waits allocates past the bound).
+    /// The queue's wait itself waits on a reused source, not a semaphore (with a token it made a task node, a box and a cancellation promise).
     /// </summary>
     [TestFixture]
     internal class APendingCompletionRentsItsBoxesTests : TestBase
@@ -56,8 +58,10 @@ namespace Tsavorite.test
 
         [Test]
         [Category("TsavoriteKV")]
-        public async Task A_read_that_waits_on_the_device_rents_its_completions_boxes()
+        public async Task A_read_that_waits_on_the_device_rents_its_completions_boxes([Values(false, true)] bool timed)
         {
+            using var bound = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            var token = timed ? bound.Token : CancellationToken.None;
             using var session = store.NewSession<KeyStruct, InputStruct, OutputStruct, Empty, Quiet>(new Quiet());
             var context = session.BasicContext;
             for (var i = 0; i < Keys; i++)
@@ -79,7 +83,7 @@ namespace Tsavorite.test
                     var status = context.Read(Key(i), ref input, ref output);
                     if (!status.IsPending) continue;
                     pended++;
-                    using var outputs = await context.CompletePendingWithOutputsAsync().ConfigureAwait(false);
+                    using var outputs = await context.CompletePendingWithOutputsAsync(token: token).ConfigureAwait(false);
                     while (outputs.Next()) ClassicAssert.AreEqual(i * 10, outputs.Current.Output.value.vfield2);
                 }
                 return GC.GetTotalAllocatedBytes(precise: true) - before;
@@ -91,12 +95,12 @@ namespace Tsavorite.test
             for (var r = 0; r < Rounds; r++) rounds[r] = await Round(r + 1);
             Array.Sort(rounds);
             var perRead = rounds[Rounds / 2] / (double)PerRound;
-            TestContext.Progress.WriteLine($"pending reads {pended}; bytes per read: median {perRead:F0}, min {rounds[0] / (double)PerRound:F0}, max {rounds[^1] / (double)PerRound:F0}");
+            TestContext.Progress.WriteLine($"timed {timed}: pending reads {pended}; bytes per read: median {perRead:F0}, min {rounds[0] / (double)PerRound:F0}, max {rounds[^1] / (double)PerRound:F0}");
             ClassicAssert.AreEqual(Rounds * PerRound, pended, "CONTROL: every read waits on the device");
-            ClassicAssert.Less(perRead, Bound, $"MUTANT (a box per wait): a read that waits allocates {perRead:F0} B");
+            ClassicAssert.Less(perRead, timed ? TimedBound : Bound, $"MUTANT (a semaphore wait per read): a read that waits allocates {perRead:F0} B");
         }
 
-        // measured: 552 B pooled (the semaphore's own wait remains), 1,216 B with a box per wait
-        private const double Bound = 884;
+        // measured: 464 B a read untimed, 466 B timed; with the semaphore's wait 554 B untimed and 841 B timed
+        private const double Bound = 510, TimedBound = 650;
     }
 }
