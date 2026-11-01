@@ -25,6 +25,10 @@ namespace Tsavorite.devices
         int[] recoveredSegments = [];
         int[] passedOver = [];
         readonly ConcurrentDictionary<int, byte> replaceOnCreate = new();
+        long readsOfAbsentSegments;
+
+        /// <summary>Reads of a segment this device's map lacked whose blob did not exist (or was a stray above the adopted run): each failed by name, none created a blob.</summary>
+        public long ReadsOfAbsentSegments => Interlocked.Read(ref readsOfAbsentSegments);
         readonly BlobUtilsV12.BlobDirectory pageBlobDirectory;
         readonly string blobName;
         readonly bool underLease;
@@ -496,23 +500,33 @@ namespace Tsavorite.devices
                 Cancel = NewOperationCancel()
             });
 
-            // Lazily cache the blob entry for the segment being read
+            // Lazily cache the blob entry for the segment being read. A read finds the blob as it stands (a writer may have made it after this device
+            // listed) and never creates one (Ziltch prod 11-01: a read of segment 0 created hlog.0, a 1 GB blob of zeros).
             if (!blobs.TryGetValue(segmentId, out BlobEntry blobEntry))
             {
                 BlobEntry entry = new(this);
                 if (blobs.TryAdd(segmentId, entry))
                 {
                     var pageBlob = pageBlobDirectory.GetPageBlobClient(GetSegmentBlobName(segmentId));
-
-                    // If segment size is -1 we use a default
-                    var size = segmentSize == -1 ? MAX_PAGEBLOB_SIZE : segmentSize;
-
-                    // If no blob exists for the segment, we must first create the segment asynchronouly. (Create call takes ~70 ms by measurement)
-                    // After creation is done, we can call read.
-                    _ = entry.CreateAsync(size, pageBlob, replaceOnCreate.TryRemove(segmentId, out _));
+                    var opening = replaceOnCreate.ContainsKey(segmentId)
+                        ? Task.FromException(new InvalidOperationException($"segment {segmentId} lies above the run recovery adopted: its blob is a stray, never read"))
+                        : entry.OpenAsync(pageBlob);
+                    if (opening.IsFaulted) entry.Fail(opening.Exception.InnerException);
+                    _ = opening.ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                        {
+                            _ = Interlocked.Increment(ref readsOfAbsentSegments);
+                            _ = blobs.TryRemove(new KeyValuePair<int, BlobEntry>(segmentId, entry));
+                        }
+                    }, TaskContinuationOptions.ExecuteSynchronously);
+                    blobEntry = entry;
                 }
-                // Otherwise, some other thread beat us to it. Okay to use their blobs.
-                blobEntry = blobs[segmentId];
+                else if (!blobs.TryGetValue(segmentId, out blobEntry))
+                {
+                    entry.Fail(new InvalidOperationException($"segment {segmentId}'s blob was just found absent by another read"));
+                    blobEntry = entry;
+                }
             }
 
             TryReadAsync(blobEntry, (long)sourceAddress, (long)destinationAddress, readLength, id);

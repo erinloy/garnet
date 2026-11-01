@@ -39,7 +39,7 @@ namespace Tsavorite.devices
         }
 
         /// <summary>
-        /// Creates a new BlobEntry to represent a page blob that will be created by <see cref="CreateAsync(long, BlobUtilsV12.PageBlobClients, bool)"/>.
+        /// Creates a new BlobEntry to represent a page blob that will be created by <see cref="CreateAsync(long, BlobUtilsV12.PageBlobClients, bool, bool)"/>.
         /// </summary>
         public BlobEntry(AzureStorageDevice azureStorageDevice)
         {
@@ -48,32 +48,64 @@ namespace Tsavorite.devices
             waitingCount = 0;
         }
 
+        /// <summary>A find refused before any call: queued reads fail with <paramref name="why"/>.</summary>
+        public void Fail(Exception why)
+        {
+            CreationException = why;
+            int waitingCountSnapshot = Interlocked.Exchange(ref waitingCount, -1);
+            for (int i = 0; i < waitingCountSnapshot; i++)
+            {
+                Action action;
+                while (!pendingWrites.TryDequeue(out action)) { }
+                try { action(); } catch { /* ignore exceptions from queued actions */ }
+            }
+            pendingWrites = null;
+        }
+
         /// <summary>
         /// Exception from a failed creation, if any.
         /// </summary>
         public Exception CreationException { get; private set; }
 
         /// <summary>
+        /// Asynchronously finds the given pageBlob as it stands, for a read: it fails by name when no blob exists, and never creates one (Ziltch prod 11-01:
+        /// a read of segment 0 created hlog.0, a 1 GB blob of zeros, stamped at the read). Reads queued meanwhile run once it is found, or fail with it.
+        /// </summary>
+        public Task OpenAsync(BlobUtilsV12.PageBlobClients pageBlob) => CreateAsync(0, pageBlob, replace: false, openOnly: true);
+
+        /// <summary>
         /// Asynchronously invoke create on the given pageBlob.
         /// </summary>
         /// <param name="size">maximum size of the blob</param>
         /// <param name="pageBlob">The page blob to create</param>
-        public async Task CreateAsync(long size, BlobUtilsV12.PageBlobClients pageBlob, bool replace = false)
+        public async Task CreateAsync(long size, BlobUtilsV12.PageBlobClients pageBlob, bool replace = false, bool openOnly = false)
         {
             try
             {
                 await azureStorageDevice.BlobManager.PerformWithRetriesAsync(
                     azureStorageDevice.BlobManager.AsynchronousStorageReadMaxConcurrency,
                     true,
-                    "PageBlobClient.CreateAsync",
-                    "CreateDevice",
+                    openOnly ? "PageBlobClient.GetPropertiesAsync" : "PageBlobClient.CreateAsync",
+                    openOnly ? "OpenDeviceSegment" : "CreateDevice",
                     "",
                     pageBlob.Default.Name,
                     3000,
-                    true,
+                    !openOnly,   // an absent segment fails its reads, never the device: a critical error terminates every later call
                     async (numAttempts) =>
                     {
                         var client = (numAttempts > 1) ? pageBlob.Default : pageBlob.Aggressive;
+                        if (openOnly)
+                        {
+                            try
+                            {
+                                ETag = (await client.GetPropertiesAsync(cancellationToken: azureStorageDevice.StorageErrorHandler.Token).ConfigureAwait(false)).Value.ETag;
+                            }
+                            catch (Azure.RequestFailedException e) when (BlobUtilsV12.BlobDoesNotExist(e))
+                            {
+                                throw new InvalidOperationException($"segment blob '{pageBlob.Default.Name}' does not exist, and a read never creates one", e);
+                            }
+                            return 1;
+                        }
 
                         var response = await client.CreateAsync(
                         size: size,
