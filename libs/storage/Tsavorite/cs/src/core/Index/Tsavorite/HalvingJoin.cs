@@ -13,7 +13,7 @@ namespace Tsavorite.core
         Joined,
         /// <summary>A writer moved the copied side's entry between the walk and the swap: the copies stay invalid, and the next ask joins again.</summary>
         Raced,
-        /// <summary>Neither side can be copied from memory: a record of each lies below HeadAddress, or a side's head is in the read cache. No IO is done.</summary>
+        /// <summary>Neither side can be copied from memory: a record of each lies below HeadAddress. No IO is done.</summary>
         OnDisk,
         /// <summary>No side that could be copied has all its records below SafeReadOnlyAddress: a copy could miss an in-place update. The next ask joins again.</summary>
         Mutable,
@@ -56,6 +56,8 @@ namespace Tsavorite.core
                 var high = state[version].tableAligned + pair.Low + half;
                 if (EntryHolding(low, pair.LowWord) == null || EntryHolding(high, pair.HighWord) == null)
                     return new(HalvingJoinOutcome.Gone, 0, 0);
+                if (!TrySplicePair(low, high, ref pair))   // a side headed by read-cache copies joins its main-log chain
+                    return new(HalvingJoinOutcome.Raced, 0, 0);
 
                 List<long> lowKeys = new(), highKeys = new();
                 var lowWhy = NewestOfEachKey(pair.LowWord, pair.Low, mask, pair.Tag, lowKeys);

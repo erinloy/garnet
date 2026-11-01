@@ -17,15 +17,13 @@ namespace Tsavorite.core
         /// to BeginAddress, its records below the head read from the device one at a time with no epoch held, and the newest record of each key that
         /// hashes to the side (tombstones too) is kept as a copy. The side with fewer keys is then copied to the tail onto the other side's head and its
         /// entry swapped to the copies by CAS on the observed word, exactly as the in-memory join does. A record below an unchanged head never changes,
-        /// so a walk taken at that word is exact; a lost CAS leaves the copies invalid (Raced). A read-cache word on either side is refused.
+        /// so a walk taken at that word is exact; a lost CAS leaves the copies invalid (Raced). A side headed by read-cache copies drops them first.
         /// </summary>
         /// <summary>A test seam: runs between a device join's walk and its copy, with no epoch held.</summary>
         public System.Action HalvingJoinBeforeCopyForTest { get; set; }
 
         public unsafe HalvingJoin JoinHalvingPairFromDevice(IndexTagCollision pair)
         {
-            if (IsReadCacheWord(pair.LowWord) || IsReadCacheWord(pair.HighWord))
-                return new(HalvingJoinOutcome.OnDisk, 0, 0);
             long half, mask;
             var protect = !epoch.ThisInstanceProtected();
             if (!protect)
@@ -43,6 +41,8 @@ namespace Tsavorite.core
                 if (EntryHolding(state[version].tableAligned + pair.Low, pair.LowWord) == null
                     || EntryHolding(state[version].tableAligned + pair.Low + half, pair.HighWord) == null)
                     return new(HalvingJoinOutcome.Gone, 0, 0);
+                if (!TrySplicePair(state[version].tableAligned + pair.Low, state[version].tableAligned + pair.Low + half, ref pair))
+                    return new(HalvingJoinOutcome.Raced, 0, 0);
             }
             finally
             {

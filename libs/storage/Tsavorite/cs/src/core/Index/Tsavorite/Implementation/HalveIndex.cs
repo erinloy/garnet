@@ -147,6 +147,13 @@ namespace Tsavorite.core
                         HashBucketEntry kept = default;
                         kept.word = words[s.At[entry.Tag]];
                         if (kept.word == entry.word) { s.Duplicates++; continue; }
+                        // A read that cached a key on one side after its join: the merged entry keeps the main-log chain, as a writer's detach does.
+                        if ((kept.IsReadCache || entry.IsReadCache) && TryMainLogWord(kept.word, out var keptMain) && TryMainLogWord(entry.word, out var entryMain))
+                        {
+                            (kept.word, entry.word) = (keptMain, entryMain);
+                            words[s.At[entry.Tag]] = keptMain;
+                            if (kept.word == entry.word) { s.Duplicates++; continue; }
+                        }
                         if (!kept.IsReadCache && !entry.IsReadCache)
                         {
                             long high = Math.Max(kept.Address, entry.Address), low = Math.Min(kept.Address, entry.Address);
