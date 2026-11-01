@@ -6,8 +6,9 @@ using System.Threading;
 namespace Tsavorite.core
 {
     /// <summary>One bounded step of a live index scrub: entries it cleared, CASes it lost to a writer (skipped, never waited on),
-    /// the bucket the next step starts at, whether the table is done, and whether the step was refused (an index resize in flight).</summary>
-    public readonly record struct IndexScrubStep(long Cleared, long Lost, long Next, bool Done, bool Refused);
+    /// the bucket the next step starts at, whether the table is done, whether the step was refused (an index resize in flight), and the
+    /// main-log entries it passed at or above begin: summed over a pass, the hash chains standing.</summary>
+    public readonly record struct IndexScrubStep(long Cleared, long Lost, long Next, bool Done, bool Refused, long Standing = 0);
 
     public partial class TsavoriteKV<TStoreFunctions, TAllocator> : TsavoriteBase
         where TStoreFunctions : IStoreFunctions
@@ -35,7 +36,7 @@ namespace Tsavorite.core
                 var tableSize = state[version].size;
                 var begin = hlogBase.BeginAddress;
                 var end = Math.Min(tableSize, Math.Max(from, 0) + buckets);
-                long cleared = 0, lost = 0;
+                long cleared = 0, lost = 0, standing = 0;
                 for (var bucket = Math.Max(from, 0); bucket < end; bucket++)
                 {
                     var b = state[version].tableAligned + bucket;
@@ -45,8 +46,9 @@ namespace Tsavorite.core
                         {
                             HashBucketEntry entry = default;
                             entry.word = b->bucket_entries[slot];
-                            if (entry.word == 0 || entry.IsReadCache || entry.Tentative || entry.Address >= begin || entry.Address == LogAddress.kTempInvalidAddress)
+                            if (entry.word == 0 || entry.IsReadCache || entry.Tentative || entry.Address == LogAddress.kTempInvalidAddress)
                                 continue;
+                            if (entry.Address >= begin) { standing++; continue; }
                             if (Interlocked.CompareExchange(ref b->bucket_entries[slot], 0, entry.word) == entry.word) cleared++;
                             else lost++;
                         }
@@ -55,7 +57,7 @@ namespace Tsavorite.core
                         b = (HashBucket*)overflowBucketsAllocator.GetPhysicalAddress(overflow);
                     }
                 }
-                return new(cleared, lost, end, end >= tableSize, false);
+                return new(cleared, lost, end, end >= tableSize, false, standing);
             }
             finally
             {
