@@ -558,6 +558,7 @@ namespace Tsavorite.core
             }
 
             hlogBase.RecoveryReset(tailAddress, headAddress, recoveredHLCInfo.info.beginAddress, readOnlyAddress);
+            _ = hlogBase.ReturnPagesOutsideResident();   // pages read below the head to replay the index, under a tracker that counts them
 
             // Bring ReadOnlyAddress to the logMutableFraction boundary as in normal operation (CalculateReadOnlyAddress): recovery leaves the whole
             // resident set mutable, but only the top logMutableFraction should be. Shifting ReadOnlyAddress up flushes the pages that thereby become

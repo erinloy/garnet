@@ -1682,6 +1682,37 @@ namespace Tsavorite.core
             return GetFirstValidLogicalAddressOnPage(page);
         }
 
+        /// <summary>Pages returned because their slot held no page of the resident window when a size tracker counted the log.</summary>
+        internal long pagesReturnedOutsideResident;
+
+        /// <summary>
+        /// Returns every allocated page whose slot holds no page from ClosedUntilAddress's page to the page past the tail. A store that recovers
+        /// keeps every page it read to replay the index, those below its head too, and a size tracker counts them against its budget for the
+        /// store's life (SPARK 11-01: 38 such pages on a 32 page window, and the first page turn waited on an eviction that could free nothing).
+        /// </summary>
+        internal int ReturnPagesOutsideResident()
+        {
+            if (logSizeTracker is null)
+                return 0;
+            var low = GetPage(ClosedUntilAddress);
+            var high = GetPage(GetTailAddress()) + 1;
+            if (high - low + 1 >= BufferSize)
+                return 0;
+            var returned = 0;
+            for (var slot = 0; slot < BufferSize; slot++)
+            {
+                if (!IsAllocated(slot))
+                    continue;
+                var page = low + ((slot - low % BufferSize) % BufferSize + BufferSize) % BufferSize;   // the window's first page in this slot
+                if (page <= high)
+                    continue;
+                _wrapper.FreePage(page);
+                returned++;
+            }
+            _ = Interlocked.Add(ref pagesReturnedOutsideResident, returned);
+            return returned;
+        }
+
         /// <summary>Invokes eviction observer if set and then frees the page.</summary>
         internal void EvictPageForRecovery(long page)
         {

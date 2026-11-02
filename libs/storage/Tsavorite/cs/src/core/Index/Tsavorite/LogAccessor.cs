@@ -114,6 +114,9 @@ namespace Tsavorite.core
         /// </summary>
         public int AllocatedPageCount => allocatorBase.AllocatedPageCount;
 
+        /// <summary>Pages from the one ClosedUntilAddress is on to the one past the tail: what an allocated page count is bounded by.</summary>
+        public long ResidentWindowPages => allocatorBase.GetPage(allocatorBase.GetTailAddress()) + 2 - allocatorBase.GetPage(allocatorBase.ClosedUntilAddress);
+
         /// <summary>Get record size required to allocate a new record. Includes allocator-specific information such as key and value overflow.</summary>
         /// <remarks>Requires <see cref="RecordSizeInfo.FieldInfo"/> to be populated already.</remarks>
         public void PopulateRecordSizeInfo(ref RecordSizeInfo sizeInfo) => allocator.PopulateRecordSizeInfo(ref sizeInfo);
@@ -206,7 +209,13 @@ namespace Tsavorite.core
         /// </summary>
         /// <param name="logSizeTracker">The tracker to record operations</param>
         public void SetLogSizeTracker(LogSizeTracker<TStoreFunctions, TAllocator> logSizeTracker)
-            => allocatorBase.logSizeTracker = logSizeTracker;
+        {
+            allocatorBase.logSizeTracker = logSizeTracker;
+            _ = allocatorBase.ReturnPagesOutsideResident();
+        }
+
+        /// <summary>Pages returned because they lay outside the resident window when a size tracker began counting this log (or after a recovery under one).</summary>
+        public long PagesReturnedOutsideResident => System.Threading.Interlocked.Read(ref allocatorBase.pagesReturnedOutsideResident);
 
         /// <summary>
         /// Wrapper to help dispose the subscription
