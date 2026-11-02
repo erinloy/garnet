@@ -250,6 +250,7 @@ namespace Tsavorite.core
                     readcache = allocatorFactory(allocatorSettings, storeFunctions);
                     readcacheBase = readcache.GetBase<TAllocator>();
                     readcacheBase.Initialize();
+                    InitializeReadCacheStarts();
                     ReadCache = new(this, readcache);
                 }
 

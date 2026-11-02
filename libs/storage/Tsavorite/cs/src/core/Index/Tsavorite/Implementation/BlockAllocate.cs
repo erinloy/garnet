@@ -141,6 +141,7 @@ namespace Tsavorite.core
                 if (!TryBlockAllocate(readcacheBase, recordSizeInfo.AllocatedInlineRecordSize, out newLogicalAddress, ref operationState, out status))
                     break;
                 newPhysicalAddress = readcacheBase.GetPhysicalAddress(newLogicalAddress);
+                NoteReadCacheStart(newLogicalAddress);
 
                 if (VerifyInMemoryAddresses(ref stackCtx))
                 {

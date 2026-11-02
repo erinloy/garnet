@@ -4,6 +4,7 @@
 using System;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -268,54 +269,91 @@ namespace Tsavorite.core
             ri.PreviousAddress = kTempInvalidAddress;     // Necessary for ReadCacheEvict, but cannot be kInvalidAddress or we have recordInfo.IsNull
         }
 
+        // One bit per 8-byte slot of every read-cache page: set where a record was allocated, cleared when its page has been evicted. The
+        // evictor walks these bits instead of striding by each record's stated size, so a header that overstates its size cannot hide the
+        // record after it, which stayed linked into a closed page (the dangling links of 10-30 and 11-02; their cause is still unproven).
+        long[] readCacheStarts;
+        int readCacheStartWordsPerPage;
+        long readCacheStrideOvershoots, readCacheUnwrittenStarts;
+
+        /// <summary>Records the evictor found where the previous record's stated size said there was none: each one a record the old
+        /// stride walk would have left linked into a closed page.</summary>
+        public long ReadCacheStrideOvershoots => Interlocked.Read(ref readCacheStrideOvershoots);
+
+        /// <summary>Allocated read-cache starts whose RecordInfo was never written (an allocation abandoned before its header).</summary>
+        public long ReadCacheUnwrittenStarts => Interlocked.Read(ref readCacheUnwrittenStarts);
+
+        void InitializeReadCacheStarts()
+        {
+            readCacheStartWordsPerPage = Math.Max(1, readcacheBase.PageSize >> 9);
+            readCacheStarts = new long[(long)readcacheBase.BufferSize * readCacheStartWordsPerPage];
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void NoteReadCacheStart(long logicalAddress)
+        {
+            var slot = readcacheBase.GetOffsetOnPage(logicalAddress) >> 3;
+            var word = (long)readcacheBase.GetPageIndexForAddress(logicalAddress) * readCacheStartWordsPerPage + (slot >> 6);
+            _ = Interlocked.Or(ref readCacheStarts[word], 1L << (int)(slot & 63));
+        }
+
         internal void ReadCacheEvict(long rcLogicalAddress, long rcToLogicalAddress)
         {
-            // Iterate readcache entries in the range rcFrom/ToLogicalAddress, and remove them from the hash chain.
-            // First make sure we're not trying to process a logical address that's in a page header.
-            var offsetOnPage = readcacheBase.GetOffsetOnPage(rcLogicalAddress);
-            if (offsetOnPage < PageHeader.Size)
-                rcLogicalAddress += PageHeader.Size - offsetOnPage;
-
-            while (rcLogicalAddress < rcToLogicalAddress)
+            // Every record allocated in [rcLogicalAddress, rcToLogicalAddress) is named by its start bit; each is unlinked from its key's
+            // chain. The range is below SafeHeadAddress, so every allocation in it, and the bit it set, happened before this epoch drained.
+            var pageSize = readcacheBase.PageSize;
+            var pageBits = readcacheBase.LogPageSizeBits;
+            for (var page = readcacheBase.GetPage(rcLogicalAddress); (page << pageBits) < rcToLogicalAddress; page++)
             {
-                var logRecord = new LogRecord(readcacheBase.GetPhysicalAddress(rcLogicalAddress));
-                var rcAllocatedSize = logRecord.AllocatedSize;
-                var rcRecordInfo = logRecord.Info;
-
-                // Skip the info.IsNull() "partial record at end of page" case and readcache CAS failures (marked kTempInvalidAddress: not in the hash
-                // chain, so we must not process them here). We do process other Invalid records here. A record whose PreviousAddress is kInvalidAddress
-                // IS in the chain: ConditionalInsertReadCache caches the answer for a key with no main-log record, and skipping it here left the hash
-                // entry pointing into a closed page, so every reader of the bucket spun in ReadCacheNeedToWaitForEviction forever (Ziltch router, 10-23).
-                if (rcRecordInfo.IsNull || rcRecordInfo.PreviousAddress == kTempInvalidAddress)
-                    goto NextRecord;
-
-                // If there are any readcache entries for this key, the hash chain will always be of the form:
-                //                   |----- readcache records -----|    |------ main log records ------|
-                //      hashtable -> rcN -> ... -> rc3 -> rc2 -> rc1 -> mN -> ... -> m3 -> m2 -> m1 -> 0
-
-                // This diagram shows that this readcache record's PreviousAddress (in 'entry') is always a lower-readcache or non-readcache logicalAddress,
-                // and therefore this record and the entire sub-chain "to the right" should be evicted. The sequence of events is:
-                //  1. Get the key from the readcache for this to-be-evicted record.
-                //  2. Call FindTag on that key in the main store to get the start of the hash chain.
-                //  3. Walk the hash chain's readcache entries, removing records in the "to be removed" range.
-                //     Do not remove Invalid records outside this range; that leads to race conditions.
-                Debug.Assert(!IsReadCache(rcRecordInfo.PreviousAddress) || AbsoluteAddress(rcRecordInfo.PreviousAddress) < rcLogicalAddress, "Invalid record ordering in readcache");
-
-                // Find the hash index entry for the key in the store's hash table.
-                HashEntryInfo hei = new(storeFunctions.GetKeyHashCode64(logRecord));
-                if (!FindTag(ref hei))
-                    goto NextRecord;
-
-                ReadCacheEvictChain(rcToLogicalAddress, ref hei);
-
-            NextRecord:
-                if (readcacheBase.GetOffsetOnPage(rcLogicalAddress) + rcAllocatedSize >= readcacheBase.PageSize - RecordInfo.Size)
+                var pageStart = page << pageBits;
+                var from = Math.Max(rcLogicalAddress, pageStart);
+                var to = Math.Min(rcToLogicalAddress, pageStart + pageSize);
+                var firstWord = (long)readcacheBase.GetPageIndexForPage(page) * readCacheStartWordsPerPage;
+                var slotLo = (from - pageStart) >> 3;
+                var slotHi = (to - pageStart + 7) >> 3;
+                var strideNext = 0L;
+                for (var w = slotLo >> 6; w <= (slotHi - 1) >> 6; w++)
                 {
-                    rcLogicalAddress = readcacheBase.GetFirstValidLogicalAddressOnPage(1 + readcacheBase.GetPage(rcLogicalAddress));
-                    continue;
+                    var bits = (ulong)Volatile.Read(ref readCacheStarts[firstWord + w]);
+                    if (w == slotLo >> 6)
+                        bits &= ulong.MaxValue << (int)(slotLo & 63);
+                    if (w == (slotHi - 1) >> 6 && (slotHi & 63) != 0)
+                        bits &= (1UL << (int)(slotHi & 63)) - 1;
+                    while (bits != 0)
+                    {
+                        var bit = BitOperations.TrailingZeroCount(bits);
+                        bits &= bits - 1;
+                        ReadCacheEvictOne(pageStart + ((w << 6) + bit << 3), rcToLogicalAddress, ref strideNext);
+                    }
                 }
-                rcLogicalAddress += rcAllocatedSize;
+
+                // The page's records are all unlinked: its bits go before the page is freed, so the page that next takes its buffer slot starts clean.
+                if (to == pageStart + pageSize)
+                    Array.Clear(readCacheStarts, (int)firstWord, readCacheStartWordsPerPage);
             }
+        }
+
+        void ReadCacheEvictOne(long rcLogicalAddress, long rcToLogicalAddress, ref long strideNext)
+        {
+            var logRecord = new LogRecord(readcacheBase.GetPhysicalAddress(rcLogicalAddress));
+            var rcRecordInfo = logRecord.Info;
+            if (rcRecordInfo.IsNull)
+            {
+                _ = Interlocked.Increment(ref readCacheUnwrittenStarts);
+                return;
+            }
+            if (strideNext > rcLogicalAddress)
+                _ = Interlocked.Increment(ref readCacheStrideOvershoots);
+            strideNext = rcLogicalAddress + logRecord.AllocatedSize;
+
+            // A CAS failure or abandoned allocation (kTempInvalidAddress) is in no chain. A record whose PreviousAddress is kInvalidAddress IS:
+            // ConditionalInsertReadCache caches the answer for a key with no main-log record (Ziltch router, 10-23).
+            if (rcRecordInfo.PreviousAddress == kTempInvalidAddress)
+                return;
+
+            HashEntryInfo hei = new(storeFunctions.GetKeyHashCode64(logRecord));
+            if (FindTag(ref hei))
+                ReadCacheEvictChain(rcToLogicalAddress, ref hei);
         }
 
         private void ReadCacheEvictChain(long rcToLogicalAddress, ref HashEntryInfo hei)
