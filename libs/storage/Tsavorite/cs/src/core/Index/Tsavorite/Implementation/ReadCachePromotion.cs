@@ -34,15 +34,38 @@ namespace Tsavorite.core
             // kInvalidAddress (0), and ReadCacheEvict reads a zero RecordInfo as a page's padding (8 bytes long), so the copy was
             // never unlinked and every reader of the bucket spun on its closed page (Ziltch broker 10-26 15:20Z, 41 threads). It
             // stays Valid behind the new copy, which every reader of its key meets first; a write detaches the whole prefix.
+            // By CAS, never a plain read-modify-write: the old copy sits in the cache's oldest fraction, and the evictor closing the page below
+            // it unlinks that page's records by CAS on this same word (TryUpdateAddress). A plain write put the old PreviousAddress back, the
+            // evicted record had already been marked out of every chain, and the closed page stayed linked (Ziltch broker 11-02 07:18Z).
             ref var oldInfo = ref LogRecord.GetInfoRef(oldCopy);
-            var invalidated = oldInfo;
-            invalidated.SetInvalid();
-            if (!invalidated.IsNull)
-                oldInfo.SetInvalid();
+            while (true)
+            {
+                var seen = oldInfo;
+                var invalidated = seen;
+                invalidated.SetInvalid();
+                if (invalidated.IsNull)
+                    break;
+                promotionBeforeInvalidateForTest?.Invoke();
+                if (oldInfo.TryInvalidateFrom(seen))
+                    break;
+                _ = Interlocked.Increment(ref readCachePromotionInvalidateRetries);
+            }
             _ = Interlocked.Increment(ref readCachePromotions);
         }
 
-        long readCachePromotions, readCachePromotionsLost;
+        long readCachePromotions, readCachePromotionsLost, readCachePromotionInvalidateRetries, readCacheCopyValidateRetries;
+
+        /// <summary>Test seam: runs in a read-cache copy after its head CAS, between reading its RecordInfo and validating it.</summary>
+        internal System.Action copyBeforeValidateForTest;
+
+        /// <summary>Published read-cache copies whose validation met a word another writer had changed, and re-read it.</summary>
+        public long ReadCacheCopyValidateRetries => Interlocked.Read(ref readCacheCopyValidateRetries);
+
+        /// <summary>Test seam: runs in a promotion between reading the old copy's RecordInfo and clearing its Valid bit, where the evictor races.</summary>
+        internal System.Action promotionBeforeInvalidateForTest;
+
+        /// <summary>Promotions whose Invalid mark of the old copy met a word another writer had changed, and re-read it.</summary>
+        public long ReadCachePromotionInvalidateRetries => Interlocked.Read(ref readCachePromotionInvalidateRetries);
 
         /// <summary>Read-cache hits copied to the read cache's tail by the second chance, and those whose copy lost its head CAS or
         /// allocation and kept serving from the old copy.</summary>

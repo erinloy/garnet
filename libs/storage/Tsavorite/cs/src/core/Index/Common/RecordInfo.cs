@@ -186,6 +186,16 @@ namespace Tsavorite.core
             return expected_word == Interlocked.CompareExchange(ref word, newRI.word, expected_word);
         }
 
+        /// <summary>Clears Valid by CAS from the word <paramref name="seen"/> held. False when another writer changed the word since, as the
+        /// read cache's evictor does when TryUpdateAddress unlinks the record below: the caller re-reads, never writing an old PreviousAddress back.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryInvalidateFrom(RecordInfo seen) => seen.word == Interlocked.CompareExchange(ref word, seen.word & ~kValidBitMask, seen.word);
+
+        /// <summary>Unseals and validates by CAS from the word <paramref name="seen"/> held: false when another writer changed it since (see TryInvalidateFrom).</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryUnsealAndValidateFrom(RecordInfo seen)
+            => seen.word == Interlocked.CompareExchange(ref word, (seen.word & ~kSealedBitMask) | kValidBitMask, seen.word);
+
         public readonly bool IsNull => word == 0;
 
         public readonly bool Tombstone

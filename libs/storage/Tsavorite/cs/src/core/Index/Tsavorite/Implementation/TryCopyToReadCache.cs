@@ -59,7 +59,16 @@ namespace Tsavorite.core
             // We don't call PostInitialWriter here so we must do the size tracking separately.
             readcacheBase.logSizeTracker?.UpdateSize(in newLogRecord, add: true);
 
-            newLogRecord.InfoRef.UnsealAndValidate();
+            // By CAS from here on: the copy is published, and the evictor closing the page of the record it links unlinks that record by CAS on
+            // this word (TryUpdateAddress). A plain write would put the evicted address back (see PromoteReadCacheHit).
+            while (true)
+            {
+                var seen = newLogRecord.Info;
+                copyBeforeValidateForTest?.Invoke();
+                if (newLogRecord.InfoRef.TryUnsealAndValidateFrom(seen))
+                    break;
+                _ = System.Threading.Interlocked.Increment(ref readCacheCopyValidateRetries);
+            }
             // Do not clear operationState.logicalAddress; we've already set it to the requested address, which is valid. We don't expose readcache
             // addresses, but here we found it in the main log address space, so retain that address.
             stackCtx.ClearNewRecord();
