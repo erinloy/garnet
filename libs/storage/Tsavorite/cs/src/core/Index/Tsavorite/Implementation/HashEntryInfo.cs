@@ -75,6 +75,12 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryCAS(long newLogicalAddress)
         {
+            // A tag found in this slot reads 0 only when a scrub or lazy reclaim emptied the slot after FindTag; another writer's FindOrCreateTag
+            // may already hold the tag in an earlier free slot, so a CAS from 0 puts it in two slots and FindTag never sees this chain (Ziltch
+            // broker probe 11-02: read-cache copies and main-log upserts/deletes landed in the second slot). Refused: the main log retries and
+            // finds the tag again, a read-cache copy is abandoned. FindOrCreateTag's own CAS from 0 does not come here.
+            if (entry.word == 0)
+                return false;
             // Insert as the first record in the hash chain.
             HashBucketEntry updatedEntry = new()
             {

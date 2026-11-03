@@ -169,7 +169,7 @@ namespace Tsavorite.core
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool CASRecordIntoChain(long newLogicalAddress, ref LogRecord newLogRecord, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx)
+        private bool CASRecordIntoChain(long newLogicalAddress, ref LogRecord newLogRecord, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx, ZeroCasSite site)
         {
             // Latch-free read cache: the only structural CAS is on the hash-table entry. The new record's PreviousAddress is
             // already the first main-log address (recSrc.LatestLogicalAddress), so CAS'ing it into the hash entry atomically
@@ -180,6 +180,8 @@ namespace Tsavorite.core
             var result = stackCtx.hei.TryCAS(newLogicalAddress);
             if (result)
                 newLogRecord.InfoRef.UnsealAndValidate();
+            else if (stackCtx.hei.entry.word == 0)
+                NoteZeroCasRefused(site);
             return result;
         }
 
@@ -209,6 +211,7 @@ namespace Tsavorite.core
                 return false;
 
             // Between the time we found the tag and the time we locked the bucket the record in hei.entry may have been elided, so make sure we don't have a stale address in hei.entry.
+            tagFoundBeforeReadForTest?.Invoke(stackCtx.hei);
             stackCtx.hei.SetToCurrent();
             stackCtx.SetRecordSourceToHashEntry(hlogBase);
             return true;
@@ -226,6 +229,7 @@ namespace Tsavorite.core
                 return false;
 
             // Between the time we found the tag and the time we locked the bucket the record in hei.entry may have been elided, so make sure we don't have a stale address in hei.entry.
+            tagFoundBeforeReadForTest?.Invoke(stackCtx.hei);
             stackCtx.hei.SetToCurrent();
             stackCtx.SetRecordSourceToHashEntry(hlogBase);
             return true;
@@ -243,6 +247,7 @@ namespace Tsavorite.core
                 return false;
 
             // Between the time we found the tag and the time we locked the bucket the record in hei.entry may have been elided, so make sure we don't have a stale address in hei.entry.
+            tagFoundBeforeReadForTest?.Invoke(stackCtx.hei);
             stackCtx.hei.SetToCurrent();
             stackCtx.SetRecordSourceToHashEntry(hlogBase);
             return true;

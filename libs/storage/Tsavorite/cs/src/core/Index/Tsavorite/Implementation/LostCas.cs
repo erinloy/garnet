@@ -8,6 +8,9 @@ namespace Tsavorite.core
 {
     using static LogAddress;
 
+    /// <summary>The operation whose head CAS met an emptied slot.</summary>
+    internal enum ZeroCasSite { Upsert, Delete, Rmw, CopyToTail, ReadCacheCopy }
+
     public unsafe partial class TsavoriteKV<TStoreFunctions, TAllocator> : TsavoriteBase
         where TStoreFunctions : IStoreFunctions
         where TAllocator : IAllocator<TStoreFunctions>
@@ -19,6 +22,20 @@ namespace Tsavorite.core
         internal const int CasLossesBeforeRefresh = 8;
 
         private long casLostEvicted, casLostPromoted, casLostOther, casPastBound;
+        private readonly long[] zeroCasRefused = new long[(int)ZeroCasSite.ReadCacheCopy + 1];
+
+        /// <summary>Test seam: runs after a lock helper found the key's tag and before it reads the slot's current word.</summary>
+        internal System.Action<HashEntryInfo> tagFoundBeforeReadForTest;
+
+        private void NoteZeroCasRefused(ZeroCasSite site) => _ = Interlocked.Increment(ref zeroCasRefused[(int)site]);
+
+        /// <summary>
+        /// Head CASes refused because the found tag's slot had been emptied under the operation (see <see cref="HashEntryInfo"/>.TryCAS), by
+        /// operation: main-log inserts retry and find the tag again; a read-cache copy is abandoned.
+        /// </summary>
+        public (long Upsert, long Delete, long Rmw, long CopyToTail, long ReadCacheCopy) ZeroCasRefusals
+            => (Interlocked.Read(ref zeroCasRefused[0]), Interlocked.Read(ref zeroCasRefused[1]), Interlocked.Read(ref zeroCasRefused[2]),
+                Interlocked.Read(ref zeroCasRefused[3]), Interlocked.Read(ref zeroCasRefused[4]));
         private static int warnedPromoted;
 
         /// <summary>

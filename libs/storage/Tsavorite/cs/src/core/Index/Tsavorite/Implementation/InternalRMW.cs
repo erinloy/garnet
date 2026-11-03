@@ -574,7 +574,7 @@ namespace Tsavorite.core
             // The record being cas'd below is going to be the tombstone record in the case of RCU requested tombstone, and NCU tombstoning.
             // For all other cases this is the new computed record after an RMW.
             // Insert the new record by CAS'ing it into the hash entry (this also detaches/drops any read-cache prefix).
-            var success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx);
+            var success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx, ZeroCasSite.Rmw);
             if (success)
             {
                 // Track key overflow internally — session functions only track in-place value deltas.

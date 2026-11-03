@@ -368,7 +368,7 @@ namespace Tsavorite.core
 
             // Insert the new record by CAS'ing it into the hash entry (this also detaches/drops any read-cache prefix).
             // If the current record can be elided then we can freelist it; detach it by swapping its .PreviousAddress into newRecordInfo.
-            success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx);
+            success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx, ZeroCasSite.Upsert);
             if (success)
             {
                 // Track key overflow internally — session functions only track in-place value deltas.

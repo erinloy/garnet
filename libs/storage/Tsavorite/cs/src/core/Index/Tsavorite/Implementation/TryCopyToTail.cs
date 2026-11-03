@@ -41,7 +41,7 @@ namespace Tsavorite.core
                 newLogRecord.InfoRef.SetTombstone();   // a carried tombstone stays one (compaction under KeepDeleteTombstones)
 
             // Insert the new record by CAS'ing it into the hash entry (this also detaches/drops any read-cache prefix).
-            var success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx);
+            var success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx, ZeroCasSite.CopyToTail);
             if (success)
             {
                 // We don't call PostInitialWriter here so we must do the size tracking separately.

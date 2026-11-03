@@ -49,6 +49,8 @@ namespace Tsavorite.core
             // instead of promoting. So a successful CAS here cannot shadow a newer value.
             if (!stackCtx.hei.TryCAS(newLogicalAddress | RecordInfo.kIsReadCacheBitMask))
             {
+                if (stackCtx.hei.entry.word == 0)
+                    NoteZeroCasRefused(ZeroCasSite.ReadCacheCopy);
                 // Another insert won the head; abandon this copy (read-cache population is best-effort).
                 stackCtx.SetNewRecordInvalid(ref newLogRecord.InfoRef);
                 OnDispose(ref newLogRecord, DisposeReason.InitialWriterCASFailed);

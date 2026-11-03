@@ -251,7 +251,7 @@ namespace Tsavorite.core
             newLogRecord.InfoRef.SetTombstone();
 
             // Insert the new record by CAS'ing it into the hash entry (this also detaches/drops any read-cache prefix).
-            var success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx);
+            var success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx, ZeroCasSite.Delete);
             if (success)
             {
                 // Track key overflow internally — session functions only track value heap.
