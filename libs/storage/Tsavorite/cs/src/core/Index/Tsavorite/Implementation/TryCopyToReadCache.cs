@@ -35,6 +35,8 @@ namespace Tsavorite.core
             // every reader of the bucket spun (Ziltch router 10-23: ConditionalInsertReadCache caches keys with no main-log record).
             var previousAddress = stackCtx.hei.Address == kTempInvalidAddress ? kInvalidAddress : stackCtx.hei.Address;
             var newLogRecord = WriteNewRecordInfo(inputLogRecord, readcacheBase, newLogicalAddress, newPhysicalAddress, in sizeInfo, inNewVersion: false, previousAddress: previousAddress);
+            if (!readCacheRecordMarkOffForTest)
+                newLogRecord.InfoRef.SetReadCacheRecord();   // never a zero word while it can be in a chain (RecordInfo.kReadCacheRecordBitMask)
 
             stackCtx.SetNewRecord(newLogicalAddress | RecordInfo.kIsReadCacheBitMask);
             _ = newLogRecord.TryCopyFrom(in inputLogRecord, in sizeInfo);

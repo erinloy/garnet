@@ -276,6 +276,9 @@ namespace Tsavorite.core
         int readCacheStartWordsPerPage;
         long readCacheStrideOvershoots, readCacheUnwrittenStarts;
 
+        /// <summary>Test seam: write read-cache records without their marker bit, as before it (the gate's mutant).</summary>
+        internal bool readCacheRecordMarkOffForTest;
+
         /// <summary>Records the evictor found where the previous record's stated size said there was none: each one a record the old
         /// stride walk would have left linked into a closed page.</summary>
         public long ReadCacheStrideOvershoots => Interlocked.Read(ref readCacheStrideOvershoots);

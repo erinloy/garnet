@@ -293,11 +293,17 @@ namespace Tsavorite.core
             set => word = value ? word | kIsReadCacheBitMask : word & ~kIsReadCacheBitMask;
         }
 
-        internal bool Unused0
-        {
-            readonly get => (word & kUnused0BitMask) != 0;
-            set => word = value ? word | kUnused0BitMask : word & ~kUnused0BitMask;
-        }
+        // Every read-cache record carries this bit from its write until its page is freed, so its word is never 0 while it can be in a chain.
+        // Without it a copy the second chance invalidated (Valid cleared, Sealed already cleared) whose PreviousAddress is 0 (no main-log record,
+        // or an interior unlink that copied 0 into it) read as an unwritten start; the evictor skipped it and the copy above kept a link into
+        // the closed page (Ziltch broker-mix probe 11-02, cause A).
+        const long kReadCacheRecordBitMask = kUnused0BitMask;
+
+        /// <summary>Set on a read-cache record when it is written; see <see cref="kReadCacheRecordBitMask"/>.</summary>
+        internal readonly bool IsReadCacheRecord => (word & kReadCacheRecordBitMask) != 0;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void SetReadCacheRecord() => word |= kReadCacheRecordBitMask;
 
         internal bool Unused1
         {
@@ -364,7 +370,7 @@ namespace Tsavorite.core
             static string bstr(bool value) => value ? "T" : "F";
             static string bstr01(bool value) => value ? "1" : "0";
             // Unused0..Unused10 printed in declared order (Unused0 leftmost = highest bit position), grouped in 4s separated by '|'.
-            var unusedStr = $"{bstr01(Unused0)}{bstr01(Unused1)}{bstr01(Unused2)}{bstr01(Unused3)}"
+            var unusedStr = $"{bstr01(IsReadCacheRecord)}{bstr01(Unused1)}{bstr01(Unused2)}{bstr01(Unused3)}"
                           + $"|{bstr01(Unused4)}{bstr01(Unused5)}{bstr01(Unused6)}{bstr01(Unused7)}"
                           + $"|{bstr01(Unused8)}{bstr01(Unused9)}{bstr01(Unused10)}";
             return $"prev {AddressString(PreviousAddress)}, valid {bstr(Valid)}, tomb {bstr(Tombstone)}, seal {bstr(IsSealed)}, rc {bstr(IsReadCache)},"
