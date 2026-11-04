@@ -29,6 +29,11 @@ namespace Tsavorite.devices
 
         /// <summary>Reads of a segment this device's map lacked whose blob did not exist (or was a stray above the adopted run): each failed by name, none created a blob.</summary>
         public long ReadsOfAbsentSegments => Interlocked.Read(ref readsOfAbsentSegments);
+        static long processBlobReads, processBlobBytesRead;
+
+        /// <summary>Ranged blob reads every device in this process has completed, and their bytes: what the account bills as read
+        /// transactions and egress. Process-wide, so a boot can be charged phase by phase (ziltch 11-04: a roll read 300 GB).</summary>
+        public static (long Reads, long Bytes) ProcessBlobReads => (Interlocked.Read(ref processBlobReads), Interlocked.Read(ref processBlobBytesRead));
         readonly BlobUtilsV12.BlobDirectory pageBlobDirectory;
         readonly string blobName;
         readonly bool underLease;
@@ -736,6 +741,8 @@ namespace Tsavorite.devices
 
                             return length;
                         }, operationToken: token).ConfigureAwait(false);
+                    _ = Interlocked.Increment(ref processBlobReads);
+                    _ = Interlocked.Add(ref processBlobBytesRead, length);
 
                     readLength -= length;
                     offset += length;
