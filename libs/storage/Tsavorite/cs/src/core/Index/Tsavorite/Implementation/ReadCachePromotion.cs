@@ -61,6 +61,18 @@ namespace Tsavorite.core
         /// <summary>Published read-cache copies whose validation met a word another writer had changed, and re-read it.</summary>
         public long ReadCacheCopyValidateRetries => Interlocked.Read(ref readCacheCopyValidateRetries);
 
+        /// <summary>Allocations a read-cache copy retries while the key's chain is headed by a read-cache record at or above its own before it
+        /// gives the copy up (RETRY_LATER): a copy is best effort, never a spin under the epoch.</summary>
+        internal int ReadCacheAllocateTries = 64;
+
+        long readCacheAllocateSpunOut;
+
+        /// <summary>Test seam: true makes a read-cache allocation land below the chain's read-cache head, as the wedged copies' did.</summary>
+        internal System.Func<bool> readCacheAllocateBelowHeadForTest;
+
+        /// <summary>Read-cache copies given up because every allocation in <see cref="ReadCacheAllocateTries"/> landed below the chain's read-cache head.</summary>
+        public long ReadCacheAllocateSpunOut => Interlocked.Read(ref readCacheAllocateSpunOut);
+
         /// <summary>Test seam: runs in a promotion between reading the old copy's RecordInfo and clearing its Valid bit, where the evictor races.</summary>
         internal System.Action promotionBeforeInvalidateForTest;
 

@@ -135,9 +135,16 @@ namespace Tsavorite.core
         bool TryAllocateRecordReadCache<TInput, TOutput, TContext>(ref OperationState<TInput, TOutput, TContext> operationState, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx,
                                                        in RecordSizeInfo recordSizeInfo, out long newLogicalAddress, out long newPhysicalAddress, out OperationStatus status)
         {
-            // Spin to make sure the start of the tag chain is not readcache, or that newLogicalAddress is > the first address in the tag chain.
-            while (true)
+            // Retry until the start of the tag chain is not readcache, or newLogicalAddress is > the first address in the tag chain. Bounded: a copy
+            // is best effort, and an unbounded spin under the epoch filled the epoch table (matrix-api 11-04: 124 spinners, 400 waiting for a slot).
+            for (var tries = 0; ; tries++)
             {
+                if (tries == ReadCacheAllocateTries)
+                {
+                    _ = Interlocked.Increment(ref readCacheAllocateSpunOut);
+                    status = OperationStatus.RETRY_LATER;
+                    break;
+                }
                 if (!TryBlockAllocate(readcacheBase, recordSizeInfo.AllocatedInlineRecordSize, out newLogicalAddress, ref operationState, out status))
                     break;
                 newPhysicalAddress = readcacheBase.GetPhysicalAddress(newLogicalAddress);
@@ -145,7 +152,8 @@ namespace Tsavorite.core
 
                 if (VerifyInMemoryAddresses(ref stackCtx))
                 {
-                    if (!stackCtx.hei.IsReadCache || newLogicalAddress > AbsoluteAddress(stackCtx.hei.Address))
+                    if ((!stackCtx.hei.IsReadCache || newLogicalAddress > AbsoluteAddress(stackCtx.hei.Address))
+                            && readCacheAllocateBelowHeadForTest?.Invoke() != true)
                         return true;
 
                     // This allocation is below the necessary address so abandon it and repeat the loop.
