@@ -81,6 +81,8 @@ namespace Tsavorite.core
                 {
                     var source = hlog.CreateLogRecord(keys[k], hlogBase.GetPhysicalAddress(keys[k]));
                     var sizeInfo = new RecordSizeInfo() { FieldInfo = source.GetRecordFieldInfo() };
+                    if (source.Info.Tombstone)   // a tombstone is copied as a delete writes one: an in-place delete left its value's bytes, and a copy never writes them again
+                        sizeInfo.FieldInfo = new() { KeySize = sizeInfo.FieldInfo.KeySize, ExtendedNamespaceSize = sizeInfo.FieldInfo.ExtendedNamespaceSize, RecordType = sizeInfo.FieldInfo.RecordType };
                     hlog.PopulateRecordSizeInfo(ref sizeInfo);
                     if (!hlogBase.TryAllocateRetryNow(sizeInfo.AllocatedInlineRecordSize, out var address) || keys[^1] < hlogBase.HeadAddress)
                     {
@@ -89,7 +91,7 @@ namespace Tsavorite.core
                     }
                     source = hlog.CreateLogRecord(keys[k], hlogBase.GetPhysicalAddress(keys[k]));   // the allocation may have refreshed the epoch
                     var copy = WriteNewRecordInfo(source, hlogBase, address, hlogBase.GetPhysicalAddress(address), in sizeInfo, inNewVersion: false, previousAddress: previous);
-                    _ = copy.TryCopyFrom(in source, in sizeInfo);
+                    if (!source.Info.Tombstone) _ = copy.TryCopyFrom(in source, in sizeInfo);
                     if (source.Info.Tombstone)
                         copy.InfoRef.SetTombstone();
                     made[k] = address;
