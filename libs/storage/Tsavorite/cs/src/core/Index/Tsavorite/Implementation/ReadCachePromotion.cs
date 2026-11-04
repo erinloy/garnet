@@ -67,6 +67,14 @@ namespace Tsavorite.core
 
         long readCacheAllocateSpunOut;
 
+        long readCacheAllocateNoPage;
+
+        /// <summary>Read-cache copies given up because the read cache had no page ready (RETRY_NOW past its spins, or RETRY_LATER); never a wait.</summary>
+        public long ReadCacheAllocateNoPage => Interlocked.Read(ref readCacheAllocateNoPage);
+
+        /// <summary>Test seam: true makes every read-cache allocation find no page ready.</summary>
+        internal bool readCacheAllocateNoPageForTest;
+
         /// <summary>Test seam: true makes a read-cache allocation land below the chain's read-cache head, as the wedged copies' did.</summary>
         internal System.Func<bool> readCacheAllocateBelowHeadForTest;
 

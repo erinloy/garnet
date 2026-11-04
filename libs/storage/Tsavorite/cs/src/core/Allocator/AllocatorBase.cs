@@ -1482,6 +1482,25 @@ namespace Tsavorite.core
             return GetLogicalAddressOfStartOfPage(localTailPageOffset.Page) | ((long)(localTailPageOffset.Offset - numSlots));
         }
 
+        /// <summary>Try allocate for a best-effort copy: RETRY_NOW is retried at most <paramref name="spins"/> times (draining the epoch), and
+        /// it never waits on the flush event. False when no page was ready: the caller gives the copy up. Ziltch matrix-api 11-04: read-cache
+        /// copies waited in TryAllocateRetryNow for a page turn that did not come, 50 at a time, and the cell's door went dark.</summary>
+        public bool TryAllocateNoWait(int numSlots, int spins, out long logicalAddress)
+        {
+            for (var i = 0; (logicalAddress = TryAllocate(numSlots)) < 0; i++)
+            {
+                if (i == spins)
+                {
+                    logicalAddress = 0;
+                    return false;
+                }
+                _ = TryComplete();
+                epoch.ProtectAndDrain();
+                _ = Thread.Yield();
+            }
+            return logicalAddress != 0;
+        }
+
         /// <summary>Try allocate, spin for RETRY_NOW (logicalAddress is less than 0) case</summary>
         /// <param name="numSlots">Number of slots to allocate</param>
         /// <param name="logicalAddress">Returned address, or RETRY_LATER (if 0) indicator</param>

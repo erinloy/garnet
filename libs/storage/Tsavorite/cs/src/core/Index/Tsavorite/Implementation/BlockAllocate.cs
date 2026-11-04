@@ -146,8 +146,15 @@ namespace Tsavorite.core
                     status = OperationStatus.RETRY_LATER;
                     break;
                 }
-                if (!TryBlockAllocate(readcacheBase, recordSizeInfo.AllocatedInlineRecordSize, out newLogicalAddress, ref operationState, out status))
+                // Never the flush-event wait of TryBlockAllocate: a copy that finds no page ready is given up (matrix-api 11-04, after efddc765b).
+                if (readCacheAllocateNoPageForTest || !readcacheBase.TryAllocateNoWait(recordSizeInfo.AllocatedInlineRecordSize, (int)Constants.kFlushSpinCount, out newLogicalAddress))
+                {
+                    _ = Interlocked.Increment(ref readCacheAllocateNoPage);
+                    newLogicalAddress = 0;
+                    status = OperationStatus.ALLOCATE_FAILED;
                     break;
+                }
+                status = OperationStatus.SUCCESS;
                 newPhysicalAddress = readcacheBase.GetPhysicalAddress(newLogicalAddress);
                 NoteReadCacheStart(newLogicalAddress);
 

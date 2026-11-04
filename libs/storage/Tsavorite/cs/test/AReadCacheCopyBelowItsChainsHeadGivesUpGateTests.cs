@@ -43,7 +43,10 @@ namespace Tsavorite.test
         public void TearDown()
         {
             if (store != null)
+            {
                 store.readCacheAllocateBelowHeadForTest = null;
+                store.readCacheAllocateNoPageForTest = false;
+            }
             session?.Dispose(); session = null;
             store?.Dispose(); store = null;
             log?.Dispose(); log = null;
@@ -83,10 +86,23 @@ namespace Tsavorite.test
         [Test]
         [Category("TsavoriteKV")]
         [Category("ReadCache")]
+        public void A_copy_that_finds_no_read_cache_page_ready_is_given_up_never_waited()
+        {
+            store.readCacheAllocateNoPageForTest = true;
+            var offered = Task.Run(() => Offer(11));
+            ClassicAssert.IsTrue(offered.Wait(TimeSpan.FromSeconds(10)), "the offer returns");
+            ClassicAssert.IsFalse(offered.Result, "a copy with no page ready is not cached");
+            ClassicAssert.AreEqual(1, store.ReadCacheAllocateNoPage, "the given-up copy is counted (MUTANT: the flush-event wait path counts nothing)");
+        }
+
+        [Test]
+        [Category("TsavoriteKV")]
+        [Category("ReadCache")]
         public void CONTROL_a_copy_with_room_above_the_head_lands_and_nothing_is_given_up()
         {
             ClassicAssert.IsTrue(Offer(9), "an offer for a key with no record lands in the read cache");
             ClassicAssert.AreEqual(0, store.ReadCacheAllocateSpunOut);
+            ClassicAssert.AreEqual(0, store.ReadCacheAllocateNoPage);
         }
     }
 }
