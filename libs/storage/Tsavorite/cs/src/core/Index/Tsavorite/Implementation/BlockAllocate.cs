@@ -142,6 +142,7 @@ namespace Tsavorite.core
                 if (tries == ReadCacheAllocateTries)
                 {
                     _ = Interlocked.Increment(ref readCacheAllocateSpunOut);
+                    newLogicalAddress = 0;
                     status = OperationStatus.RETRY_LATER;
                     break;
                 }
