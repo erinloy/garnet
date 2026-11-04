@@ -653,6 +653,18 @@ namespace Tsavorite.core
                     headAddress = recoveredHLCInfo.info.headAddress;
             }
 
+            // A replay past a fold-over checkpoint's final address (to the caller's flushed mark) can name more pages above the checkpoint's head
+            // than the circular buffer holds. With no size tracker, TrimLogPages never raises the head, so page p and p + BufferSize share a slot
+            // and a read at or above head finds another page's bytes (rg 11-04: the mesh broker's 65 pages in a 32-page ring, an NRE on its first
+            // read). The resident window ends at the tail; the pages below its head are read, replayed into the index and let go, as the pages
+            // below the checkpoint's own head always were.
+            if (recoveredHLCInfo.info.useSnapshotFile == 0)
+            {
+                var ringFloor = hlogBase.GetFirstValidLogicalAddressOnPage(hlogBase.GetPage(tailAddress) - (hlogBase.MaxAllocatedPageCount - 1));
+                if (headAddress < ringFloor)
+                    headAddress = ringFloor;
+            }
+
             if (hlogBase.FlushedUntilAddress > scanFromAddress)
                 scanFromAddress = hlogBase.FlushedUntilAddress;
             return true;
