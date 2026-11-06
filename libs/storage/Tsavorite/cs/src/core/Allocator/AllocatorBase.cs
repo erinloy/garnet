@@ -1524,21 +1524,53 @@ namespace Tsavorite.core
                     _ = Thread.Yield();
                     continue;
                 }
-                try
-                {
-                    epoch.Suspend();
-                    _ = localFlushEvent.Wait(TimeSpan.FromMilliseconds(1));
-                }
-                finally
-                {
-                    epoch.Resume();
-                }
-                localFlushEvent = flushEvent;
-                spins = 0;
+                return WaitToAllocate(numSlots, localFlushEvent, out logicalAddress);
             }
 
             // 0: RETRY_LATER
             return logicalAddress != 0;
+        }
+
+        /// <summary>Allocations that spun out and waited for a page to turn, and the threads waiting now (ziltch matrix-api 11-06:
+        /// 81 writers waited here at once and the process burned 19 cores, with nothing to say so).</summary>
+        public long AllocateWaits, AllocateWaiting;
+
+        /// <summary>The waiting half of <see cref="TryAllocateRetryNow"/>: the same loop, counted while it waits.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private bool WaitToAllocate(int numSlots, CompletionEvent localFlushEvent, out long logicalAddress)
+        {
+            _ = Interlocked.Increment(ref AllocateWaits);
+            _ = Interlocked.Increment(ref AllocateWaiting);
+            try
+            {
+                while (true)
+                {
+                    try
+                    {
+                        epoch.Suspend();
+                        _ = localFlushEvent.Wait(TimeSpan.FromMilliseconds(1));
+                    }
+                    finally
+                    {
+                        epoch.Resume();
+                    }
+                    localFlushEvent = flushEvent;
+                    for (var spins = 0; ;)
+                    {
+                        if ((logicalAddress = TryAllocate(numSlots)) >= 0)
+                            return logicalAddress != 0;   // 0: RETRY_LATER
+                        _ = TryComplete();
+                        epoch.ProtectAndDrain();
+                        if (++spins >= Constants.kFlushSpinCount)
+                            break;
+                        _ = Thread.Yield();
+                    }
+                }
+            }
+            finally
+            {
+                _ = Interlocked.Decrement(ref AllocateWaiting);
+            }
         }
 
         /// <summary>

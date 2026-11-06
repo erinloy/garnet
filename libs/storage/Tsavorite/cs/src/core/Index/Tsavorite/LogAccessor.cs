@@ -3,6 +3,7 @@
 
 using System;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace Tsavorite.core
 {
@@ -56,6 +57,15 @@ namespace Tsavorite.core
         /// Head address of log, i.e. beginning of in-memory regions
         /// </summary>
         public long HeadAddress => allocatorBase.HeadAddress;
+
+        /// <summary>The highest address whose page has been closed; a page past it cannot be allocated again until it closes.</summary>
+        public long ClosedUntilAddress => allocatorBase.ClosedUntilAddress;
+
+        /// <summary>Allocations that spun out and waited for a page to turn (process life).</summary>
+        public long AllocateWaits => Interlocked.Read(ref allocatorBase.AllocateWaits);
+
+        /// <summary>Threads waiting now for a page to turn.</summary>
+        public long AllocateWaiting => Interlocked.Read(ref allocatorBase.AllocateWaiting);
 
         /// <summary>
         /// Beginning address of log

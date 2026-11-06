@@ -75,6 +75,8 @@ namespace Tsavorite.core
                     operationState.logicalAddress = LogAddress.kInvalidAddress;
                     // Async handles this in its own way, as part of the *AsyncResult.Complete*() sequence.
                     Debug.Assert(!operationState.flushEvent.IsDefault(), "flushEvent is required for ALLOCATE_FAILED");
+                    _ = Interlocked.Increment(ref hlogBase.AllocateWaits);
+                    _ = Interlocked.Increment(ref hlogBase.AllocateWaiting);
                     try
                     {
                         epoch.Suspend();
@@ -82,6 +84,7 @@ namespace Tsavorite.core
                     }
                     finally
                     {
+                        _ = Interlocked.Decrement(ref hlogBase.AllocateWaiting);
                         operationState.flushEvent = default;
                         epoch.Resume();
                     }
