@@ -728,7 +728,7 @@ namespace Tsavorite.devices
                         $"id={id} readLength={length} sourceAddress={sourceAddress + offset}",
                         blob.PageBlob.Default.Name,
                         1000 + (int)length / 1000,
-                        true,
+                        false,   // ZILTCH 11-08: a refused read (404/416) fails that read, not every pending one (webfrontend's uint.MaxValue bursts)
                         async (numAttempts) =>
                         {
                             if (numAttempts > 0)
