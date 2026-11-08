@@ -29,6 +29,9 @@ namespace Tsavorite.devices
 
         /// <summary>Reads of a segment this device's map lacked whose blob did not exist (or was a stray above the adopted run): each failed by name, none created a blob.</summary>
         public long ReadsOfAbsentSegments => Interlocked.Read(ref readsOfAbsentSegments);
+
+        /// <summary>Why this device's partition terminated (when, where, the failure with its status and code), whatever the logger; null while it runs.</summary>
+        public string TerminatedBecause => StorageErrorHandler?.TerminatedBecause;
         static long processBlobReads, processBlobBytesRead;
 
         /// <summary>Ranged blob reads every device in this process has completed, and their bytes: what the account bills as read
