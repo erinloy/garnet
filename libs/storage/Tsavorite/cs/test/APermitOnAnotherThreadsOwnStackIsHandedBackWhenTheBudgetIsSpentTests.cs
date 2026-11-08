@@ -29,7 +29,7 @@ namespace Tsavorite.test
             return result;
         }
 
-        /// <summary>An owner that parks <paramref name="buffers"/> - 1 buffers of <paramref name="bytes"/> on its own stack and holds one, returned
+        /// <summary>An owner that parks <c>buffers</c> - 1 buffers of <c>bytes</c> on its own stack and holds one, returned
         /// at <see cref="Owner.Touch"/>: its next touch of the pool.</summary>
         private sealed class Owner : IDisposable
         {

@@ -116,6 +116,19 @@ namespace Tsavorite.core
                 throw new TsavoriteException($"Error flushing page {pageIndex} to device");
         }
 
+        /// <summary>
+        /// Wait until the read and flush of a page are no longer in flight, without throwing on their error status. Used to quiesce a batch
+        /// after one page's read failed: the remaining native reads/flushes still target the page buffers and the recovery device, so the
+        /// failure must not unwind (and let the caller dispose them) until every completion callback has run.
+        /// </summary>
+        internal async ValueTask DrainPageAsync(int pageIndex)
+        {
+            while (readStatus[pageIndex] == ReadStatus.Pending)
+                await readSemaphore.WaitAsync().ConfigureAwait(false);
+            while (flushStatus[pageIndex] == FlushStatus.Pending)
+                await flushSemaphore.WaitAsync().ConfigureAwait(false);
+        }
+
         internal void Dispose()
         {
             recoveryDevice.Dispose();
@@ -839,7 +852,15 @@ namespace Tsavorite.core
                 {
                     // Ensure page has been read into memory
                     var pageIndex = hlogBase.GetPageIndexForPage(p);
-                    await recoveryStatus.WaitReadAsync(pageIndex, cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await recoveryStatus.WaitReadAsync(pageIndex, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (TsavoriteException)
+                    {
+                        await DrainRecoveryBatchAsync(startPage, end, recoveryStatus).ConfigureAwait(false);
+                        throw;
+                    }
 
                     // We make an extra pass to clear locks when reading every page back into memory
                     ClearBitsOnPage(p, untilAddress, in options, recoveryStatus.headAddress);
@@ -966,6 +987,17 @@ namespace Tsavorite.core
         }
 
         /// <summary>
+        /// After a page read (or flush) of a recovery batch failed, wait for every other read and flush of pages [startPage, endPage) that is
+        /// still in flight before the failure unwinds. The caller of recovery disposes the store (page buffers) and the recovery device on
+        /// failure; a native completion landing after that writes into freed memory and kills the process instead of surfacing the error.
+        /// </summary>
+        private async ValueTask DrainRecoveryBatchAsync(long startPage, long endPage, RecoveryStatus recoveryStatus)
+        {
+            for (long page = startPage; page < endPage; page++)
+                await recoveryStatus.DrainPageAsync(hlogBase.GetPageIndexForPage(page)).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Asynchronously recover the hybrid log from snapshot files.
         /// </summary>
         /// <param name="scanFromAddress">The address to start scanning from; the lowest address at which we will bring pages into the circular buffer (may be in the middle of a page)</param>
@@ -1011,7 +1043,15 @@ namespace Tsavorite.core
                     if (p < snapshotEndPage)
                     {
                         // Ensure the page is read from file
-                        await recoveryStatus.WaitReadAsync(pageIndex, cancellationToken).ConfigureAwait(false);
+                        try
+                        {
+                            await recoveryStatus.WaitReadAsync(pageIndex, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (TsavoriteException)
+                        {
+                            await DrainRecoveryBatchAsync(startPage, end, recoveryStatus).ConfigureAwait(false);
+                            throw;
+                        }
 
                         // We make an extra pass to clear locks when reading pages back into memory
                         ClearBitsOnPage(p, untilAddress, in options, recoveryStatus.headAddress, snapshotFromAddress: scanFromAddress);

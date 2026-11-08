@@ -18,6 +18,7 @@ namespace Tsavorite.test
     /// way, so every read made two delegates even when the segment's handle was already open: 422 MB in 30 s on one broker. Both are
     /// now made once, in their constructors, and a read's bytes up to its issue no longer carry them.
     /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     [TestFixture]
     internal class ALogReadMakesNoDelegateToIssueItsDeviceReadTests : TestBase
     {

@@ -15,6 +15,7 @@ namespace Tsavorite.test
     /// <summary>mesh 10-30 12:44Z: a chunk store's log (2.4 GB, its memory 128 MiB) was read from Z: at ~2.6 ms a read, because every device
     /// opens with FILE_FLAG_NO_BUFFERING and the OS cache never sees it. A device opened with buffering on and its writes written through
     /// is read from the OS cache, and a write it completes is on the disk, as an unbuffered one's is. Read from the handle's own mode.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     [TestFixture]
     public unsafe class ALogDeviceOpenedOsCachedWritesThroughTests
     {
