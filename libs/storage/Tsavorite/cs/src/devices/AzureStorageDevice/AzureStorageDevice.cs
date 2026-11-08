@@ -32,6 +32,10 @@ namespace Tsavorite.devices
 
         /// <summary>Why this device's partition terminated (when, where, the failure with its status and code), whatever the logger; null while it runs.</summary>
         public string TerminatedBecause => StorageErrorHandler?.TerminatedBecause;
+
+        /// <summary>The first read this device failed (blob, source, bytes, the exception's type and first line), whatever the logger; null until one fails.</summary>
+        public string FirstReadFailure => Volatile.Read(ref firstReadFailure);
+        string firstReadFailure;
         static long processBlobReads, processBlobBytesRead;
 
         /// <summary>Ranged blob reads every device in this process has completed, and their bytes: what the account bills as read
@@ -558,6 +562,13 @@ namespace Tsavorite.devices
                 ? $"the device was terminated ({handler.TerminatedBecause ?? "its cause was not recorded"})"
                 : "the operation was cancelled; the device is not terminated");
 
+        static string DescribeFailure(Exception e)
+        {
+            var inner = e is AggregateException { InnerException: { } one } ? one : e;
+            var what = inner is Azure.RequestFailedException refused ? $"{inner.GetType().Name} status {refused.Status} {refused.ErrorCode}" : inner.GetType().Name;
+            return $"{what}: {inner.Message?.Split('\n')[0].Trim()}";
+        }
+
         unsafe void ReadFromBlobAsync(BlobEntry blobEntry, long sourceAddress, long destinationAddress, uint readLength, long id)
         {
             ReadFromBlobUnsafeAsync(blobEntry, sourceAddress, destinationAddress, readLength, id)
@@ -570,7 +581,9 @@ namespace Tsavorite.devices
                         {
                             BlobManager?.StorageTracer?.TsavoriteStorageProgress($"StorageOpReturned AzureStorageDevice.ReadAsync id={id} (Failure)");
                             // A FAILED READ NAMES ITS EXCEPTION, for the same reason the write above does.
-                            BlobManager?.HandleStorageError(nameof(ReadFromBlobAsync), $"read FAILED at source={sourceAddress} bytes={readLength} id={id}", blobEntry.PageBlob.Default?.Name, WhyFailed(t), isFatal: false, isWarning: false);
+                            var why = WhyFailed(t);
+                            _ = Interlocked.CompareExchange(ref firstReadFailure, $"{DateTime.UtcNow:u} blob={blobEntry.PageBlob.Default?.Name ?? "(absent)"} source={sourceAddress} bytes={readLength}: {DescribeFailure(why)}", null);
+                            BlobManager?.HandleStorageError(nameof(ReadFromBlobAsync), $"read FAILED at source={sourceAddress} bytes={readLength} id={id}", blobEntry.PageBlob.Default?.Name, why, isFatal: false, isWarning: false);
                             request.Callback(uint.MaxValue, request.NumBytes, request.Context);
                         }
                         else
