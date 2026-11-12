@@ -565,6 +565,9 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private Status ConditionalInsertBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress)
         {
+            // The same refusal as the read-cache insert above: under this store's epoch the Resume would nest (mesh 11-12 wedge).
+            if (store.epoch.ThisInstanceProtected())
+                return store.RefuseConditionalInsertUnderEpoch();
             UnsafeResumeThread();
             try
             {

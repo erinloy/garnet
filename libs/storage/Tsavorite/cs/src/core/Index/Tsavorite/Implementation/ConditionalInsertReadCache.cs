@@ -93,6 +93,17 @@ namespace Tsavorite.core
 
         long readCacheInsertsLanded, readCacheInsertsHeld, readCacheInsertsBelowMemory, readCacheInsertsLost, readCacheInsertsUnderEpoch;
 
+        long conditionalInsertsUnderEpoch;
+
+        internal Status RefuseConditionalInsertUnderEpoch()
+        {
+            _ = System.Threading.Interlocked.Increment(ref conditionalInsertsUnderEpoch);
+            return new(StatusCode.NotFound);
+        }
+
+        /// <summary>Conditional log inserts refused: the calling thread already held this store's epoch (the record was not written).</summary>
+        public long ConditionalInsertsUnderEpoch => System.Threading.Interlocked.Read(ref conditionalInsertsUnderEpoch);
+
         internal bool RefuseReadCacheInsertUnderEpoch()
         {
             _ = System.Threading.Interlocked.Increment(ref readCacheInsertsUnderEpoch);

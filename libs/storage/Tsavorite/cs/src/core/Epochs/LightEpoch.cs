@@ -82,6 +82,10 @@ namespace Tsavorite.core
             /// </summary>
             [ThreadStatic]
             internal static InstanceIndexBuffer Entries;
+
+            /// <summary>Fork: the slot a nested acquire set aside, given back when the nest releases (kInvalidIndex: no nest).</summary>
+            [ThreadStatic]
+            internal static InstanceIndexBuffer Outer;
         }
 
         /// <summary>
@@ -514,6 +518,8 @@ namespace Tsavorite.core
         void Acquire()
         {
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
+            if (entry != kInvalidIndex && (*(tableAligned + entry)).threadId == Metadata.threadId)
+                SetAsideForNest(ref entry);
             DebugAssertEntryNotReserved(entry,
                 "Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
 
@@ -528,6 +534,31 @@ namespace Tsavorite.core
             }
         }
 
+        static long nestedAcquires, nestsTooDeep;
+        static string firstNestStack;
+
+        /// <summary>Fork (mesh 11-12): a nested acquire on a thread already holding this instance claimed a second slot, and its release left
+        /// the first held at its old epoch for good: no drain ran again, pages stopped closing and every allocator waiter blocked. Tests throw.</summary>
+        public static bool NestedAcquireThrows { get; set; }
+
+        /// <summary>Fork: nested acquires seen process-wide, those nested past one deep (the middle slot is lost as before), and the first's stack.</summary>
+        public static (long Nested, long TooDeep, string FirstStack) NestedAcquires
+            => (Interlocked.Read(ref nestedAcquires), Interlocked.Read(ref nestsTooDeep), Volatile.Read(ref firstNestStack));
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        void SetAsideForNest(ref int entry)
+        {
+            if (NestedAcquireThrows)
+                throw new InvalidOperationException("LightEpoch: this thread already holds this epoch; a nested acquire leaks its slot. Do not re-enter Tsavorite under its epoch.");
+            _ = Interlocked.Increment(ref nestedAcquires);
+            _ = Interlocked.CompareExchange(ref firstNestStack, Environment.StackTrace, null);
+            ref var outer = ref Metadata.Outer.GetRef(instanceId);
+            if (outer != kInvalidIndex)
+                _ = Interlocked.Increment(ref nestsTooDeep);
+            else
+                outer = entry;
+            entry = kInvalidIndex;
+        }
         /// <summary>
         /// Thread releases its epoch entry
         /// </summary>
@@ -548,7 +579,9 @@ namespace Tsavorite.core
             // in the gap, and this thread's clear would then land on top and wipe it.
             Volatile.Write(ref (*(tableAligned + entry)).localCurrentEpoch, 0);
 
-            entry = kInvalidIndex;
+            ref var outer = ref Metadata.Outer.GetRef(instanceId);
+            entry = outer;
+            outer = kInvalidIndex;
             if (waiterCount > 0)
                 waiterSemaphore.Release();
         }
