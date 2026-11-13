@@ -2768,6 +2768,11 @@ namespace Tsavorite.core
         /// <summary>
         /// Asynchronously recover instance to TsavoriteLog's latest commit, when being used as a readonly log iterator
         /// </summary>
+        private long readOnlyFollowsWithoutACommit;
+
+        /// <summary>Read-only recoveries that read no commit after this log had followed one, and so kept what it had.</summary>
+        public long ReadOnlyFollowsWithoutACommit => Interlocked.Read(ref readOnlyFollowsWithoutACommit);
+
         public async ValueTask RecoverReadOnlyAsync(CancellationToken cancellationToken = default)
         {
             if (!readOnlyMode)
@@ -2820,6 +2825,7 @@ namespace Tsavorite.core
         private async ValueTask<byte[]> RestoreLatestAsync(CancellationToken cancellationToken)
         {
             TsavoriteLogRecoveryInfo info = new();
+            var followed = readOnlyMode && !fastCommitMode && CommittedUntilAddress > FirstValidAddress;
 
             long scanStart = 0;
             foreach (var metadataCommit in logCommitManager.ListCommits())
@@ -2833,6 +2839,16 @@ namespace Tsavorite.core
                     }
                 }
                 catch { }
+            }
+
+            // rg 11-13 (fyre #85844): a writer keeps one commit and deletes the one before, so a read-only follow can list a commit that is
+            // gone when it reads it. Resetting here put a live replica's begin at 0 and its scans read cold.0 (absent) until the next follow.
+            // A read-only log that has already followed a commit keeps it: no commit read is not "the log is empty".
+            if (followed && info.UntilAddress == 0)
+            {
+                Interlocked.Increment(ref readOnlyFollowsWithoutACommit);
+                logger?.LogWarning("A read-only follow read no commit; it keeps its begin {begin} and commit {committed}", BeginAddress, CommittedUntilAddress);
+                return RecoveredCookie;
             }
 
             // Only in fast commit mode will we potentially need to recover from an entry in the log
