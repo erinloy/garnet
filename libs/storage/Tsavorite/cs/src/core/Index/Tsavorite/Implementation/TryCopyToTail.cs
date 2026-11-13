@@ -41,6 +41,7 @@ namespace Tsavorite.core
                 newLogRecord.InfoRef.SetTombstone();   // a carried tombstone stays one (compaction under KeepDeleteTombstones)
 
             // Insert the new record by CAS'ing it into the hash entry (this also detaches/drops any read-cache prefix).
+            copyBeforeCasForTest?.Invoke(stackCtx.hei);
             var success = CASRecordIntoChain(newLogicalAddress, ref newLogRecord, ref stackCtx, ZeroCasSite.CopyToTail);
             if (success)
             {
@@ -70,7 +71,7 @@ namespace Tsavorite.core
             OnDispose(ref newLogRecord, DisposeReason.InitialWriterCASFailed);
 
             SaveAllocationForRetry(ref operationState, newLogicalAddress, newPhysicalAddress);
-            return OperationStatus.RETRY_NOW;   // CAS failure does not require epoch refresh
+            return RetryAfterLostCas(ref operationState, ref stackCtx);   // RETRY_NOW, then a bounded refresh: a copy never pins the epoch
         }
     }
 }

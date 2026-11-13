@@ -88,6 +88,14 @@ namespace Tsavorite.core
                 }
                 else if (needIO)
                     return PrepareIOForConditionalOperation(sessionFunctions, ref operationState, keyHash, in srcLogRecord, ref stackCtx2, minAddress, maxAddress);
+
+                // Retry on the entry the search just read. The lost CAS left stackCtx.hei on the old head, so a retry from it could only lose
+                // again, under one epoch, forever: no fold-over flushed and every writer waited in WaitToAllocate (dev mesh 11-13, three wedges).
+                if (status == OperationStatus.SUCCESS)
+                {
+                    stackCtx.hei = stackCtx2.hei;
+                    stackCtx.recSrc.LatestLogicalAddress = stackCtx2.recSrc.LatestLogicalAddress;
+                }
             }
         }
 

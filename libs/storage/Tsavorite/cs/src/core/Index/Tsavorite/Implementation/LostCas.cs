@@ -27,6 +27,9 @@ namespace Tsavorite.core
         /// <summary>Test seam: runs after a lock helper found the key's tag and before it reads the slot's current word.</summary>
         internal System.Action<HashEntryInfo> tagFoundBeforeReadForTest;
 
+        /// <summary>Test seam: runs in a copy to the tail after its record is written and before its head CAS.</summary>
+        internal System.Action<HashEntryInfo> copyBeforeCasForTest;
+
         private void NoteZeroCasRefused(ZeroCasSite site) => _ = Interlocked.Increment(ref zeroCasRefused[(int)site]);
 
         /// <summary>
