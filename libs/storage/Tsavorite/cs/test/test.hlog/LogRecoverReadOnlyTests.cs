@@ -61,6 +61,43 @@ namespace Tsavorite.test.recovery
                                ReadOnlyConsumerAsync(deviceName, cts.Token)).ConfigureAwait(false);
         }
 
+        // Ziltch local 11-13: a read-only follower's BeginAddress stayed at the allocator's first address after the writer truncated, so a scan
+        // from it read segments the writer had deleted and failed. A follow takes the commit's begin, at open and on every later follow.
+        [Test]
+        [Category("TsavoriteLog")]
+        public async Task AReadOnlyFollowTakesTheWritersTruncatedBegin()
+        {
+            using var device = Devices.CreateLogDevice(deviceName);
+            var logSettings = new TsavoriteLogSettings { LogDevice = device, MemorySizeBits = MinKvLogMemorySizeBits, PageSizeBits = MinKvLogPageSizeBits, SegmentSizeBits = MinKvLogPageSizeBits + 1, TryRecoverLatest = false };
+            using var log = await TsavoriteLog.CreateAsync(logSettings).ConfigureAwait(false);
+            var entry = new byte[100];
+            long Fill()
+            {
+                for (var i = 0; i < 200; i++) log.Enqueue(entry);
+                return log.TailAddress;
+            }
+
+            var firstCut = Fill();
+            await log.CommitAsync().ConfigureAwait(false);
+            log.TruncateUntil(firstCut);
+            _ = Fill();
+            await log.CommitAsync().ConfigureAwait(false);
+
+            using var roDevice = Devices.CreateLogDevice(deviceName);
+            var roSettings = new TsavoriteLogSettings { LogDevice = roDevice, ReadOnlyMode = true, PageSizeBits = MinKvLogPageSizeBits, SegmentSizeBits = MinKvLogPageSizeBits + 1 };
+            using var follower = await TsavoriteLog.CreateAsync(roSettings).ConfigureAwait(false);
+            ClassicAssert.AreEqual(log.BeginAddress, follower.BeginAddress, "the follower's begin at open is the writer's committed begin");
+            ClassicAssert.AreEqual(firstCut, follower.BeginAddress);
+
+            var secondCut = Fill();
+            await log.CommitAsync().ConfigureAwait(false);
+            log.TruncateUntil(secondCut);
+            _ = Fill();
+            await log.CommitAsync().ConfigureAwait(false);
+            await follower.RecoverReadOnlyAsync().ConfigureAwait(false);
+            ClassicAssert.AreEqual(secondCut, follower.BeginAddress, "a later follow moves the begin to the writer's newer cut");
+        }
+
         private async Task ProducerAsync(TsavoriteLog log, CancellationTokenSource cts)
         {
             for (var i = 0L; i < NumElements; ++i)

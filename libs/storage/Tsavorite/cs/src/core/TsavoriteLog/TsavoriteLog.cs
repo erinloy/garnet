@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -2904,7 +2904,12 @@ namespace Tsavorite.core
             commitNum = info.CommitNum;
             beginAddress = allocator.BeginAddress;
             if (readOnlyMode)
+            {
                 allocator.HeadAddress = long.MaxValue;
+                // A read-only log restores no hybrid log, so its allocator never learns the writer's truncation: its begin is the commit's.
+                // Left at the allocator's, a scan from BeginAddress read segments the writer had already deleted (Ziltch local, 11-13).
+                _ = Utility.MonotonicUpdate(ref beginAddress, info.BeginAddress, out _);
+            }
 
             if (scanStart > 0)
                 logCommitManager.OnRecovery(scanStart);
@@ -2981,7 +2986,10 @@ namespace Tsavorite.core
             commitNum = info.CommitNum;
             beginAddress = allocator.BeginAddress;
             if (readOnlyMode)
+            {
                 allocator.HeadAddress = long.MaxValue;
+                _ = Utility.MonotonicUpdate(ref beginAddress, info.BeginAddress, out _);   // as RestoreLatestAsync: a read-only log's begin is its commit's
+            }
 
             if (scanStart > 0)
                 logCommitManager.OnRecovery(scanStart);
