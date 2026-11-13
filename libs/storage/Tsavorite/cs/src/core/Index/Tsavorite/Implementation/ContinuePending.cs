@@ -411,6 +411,8 @@ namespace Tsavorite.core
                 if (TryFindRecordInMainLogForConditionalOperation<ConditionallyHoistedKey, TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, pendingState.requestKey, ref stackCtx,
                         currentAddress: request.logicalAddress, minAddress, pendingState.maxAddress, out internalStatus, out var needIO))
                     return OperationStatus.SUCCESS;
+                if (GivesUpWhenTailBusy(internalStatus, ref operationState))
+                    return OperationStatus.CANCELED;
                 if (!OperationStatusUtils.IsRetry(internalStatus))
                 {
                     // Plumb source logical address so PostCopyToTail can name per-flush snapshot files.

@@ -55,6 +55,7 @@ namespace Tsavorite.core
             internal const ushort kIsReadAtAddress = 0x0002;
             internal const ushort kReportsTombstone = 0x0004;
             internal const ushort kDropsTombstone = 0x0008;
+            internal const ushort kGivesUpWhenTailBusy = 0x0010;   // a cache-warm copy: RETRY_LATER or ALLOCATE_FAILED ends it CANCELED, no loop
 #pragma warning restore IDE1006 // Naming Styles
 
             internal ReadCopyOptions readCopyOptions;   // Two byte enums

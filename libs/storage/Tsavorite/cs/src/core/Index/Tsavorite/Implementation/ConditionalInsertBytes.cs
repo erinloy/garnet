@@ -17,7 +17,7 @@ namespace Tsavorite.core
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal Status ConditionalInsertBytes<TKey, TInput, TOutput, TContext, TSessionFunctionsWrapper>(TSessionFunctionsWrapper sessionFunctions,
-                TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress)
+                TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress, bool givesUpWhenTailBusy = false)
             where TKey : IKey
 #if NET9_0_OR_GREATER
                 , allows ref struct
@@ -32,7 +32,8 @@ namespace Tsavorite.core
                 // The record form's bound is exclusive (it is the source's own address); one below an aligned address names no record.
                 var source = new TransientSourceLogRecord(DiskLogRecord.CreateFromTransientLogRecord(in image));
                 return CompactionConditionalCopyToTail<TInput, TOutput, TContext, TSessionFunctionsWrapper, TransientSourceLogRecord>(
-                        sessionFunctions, in source, currentAddress: sinceAddress > 0 ? sinceAddress - 1 : 0, minAddress: sinceAddress, createTag: true);
+                        sessionFunctions, in source, currentAddress: sinceAddress > 0 ? sinceAddress - 1 : 0, minAddress: sinceAddress, createTag: true,
+                        givesUpWhenTailBusy: givesUpWhenTailBusy);
             }
             finally
             {

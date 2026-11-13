@@ -62,6 +62,8 @@ namespace Tsavorite.core
                 }
 
                 // If we're here we failed TryCopyToTail, probably a failed CAS due to another record insertion.
+                if (GivesUpWhenTailBusy(status, ref operationState))
+                    return OperationStatus.CANCELED;
                 if (!HandleImmediateRetryStatus(status, sessionFunctions, ref operationState))
                     return status;
 
@@ -76,6 +78,8 @@ namespace Tsavorite.core
                     if (TryFindRecordInMainLogForConditionalOperation<TSourceLogRecord, TInput, TOutput, TContext, TSessionFunctionsWrapper>(
                             sessionFunctions, srcLogRecord, ref stackCtx2, stackCtx.recSrc.LogicalAddress, minAddress, maxAddress, out status, out needIO))
                         return OperationStatus.SUCCESS;
+                    if (GivesUpWhenTailBusy(status, ref operationState))
+                        return OperationStatus.CANCELED;
                 }
                 while (HandleImmediateNonPendingRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(status, sessionFunctions));
 
@@ -101,12 +105,15 @@ namespace Tsavorite.core
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal Status CompactionConditionalCopyToTail<TInput, TOutput, TContext, TSessionFunctionsWrapper, TSourceLogRecord>(
-                TSessionFunctionsWrapper sessionFunctions, in TSourceLogRecord srcLogRecord, long currentAddress, long minAddress, long maxAddress = long.MaxValue, bool createTag = false)
+                TSessionFunctionsWrapper sessionFunctions, in TSourceLogRecord srcLogRecord, long currentAddress, long minAddress, long maxAddress = long.MaxValue, bool createTag = false,
+                bool givesUpWhenTailBusy = false)
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
             where TSourceLogRecord : ISourceLogRecord
         {
             Debug.Assert(epoch.ThisInstanceProtected(), "This is called only from Compaction or ConditionalInsert so the epoch should be protected");
             OperationState<TInput, TOutput, TContext> operationState = default;
+            if (givesUpWhenTailBusy)
+                operationState.operationFlags |= OperationState<TInput, TOutput, TContext>.kGivesUpWhenTailBusy;
             // Plumb the source logical address so PostCopyToTail can name per-flush snapshot files
             // (used by RangeIndex's BfTree compaction path).
             operationState.originalAddress = currentAddress;
@@ -121,6 +128,8 @@ namespace Tsavorite.core
                 {
                     if (TryFindRecordInMainLogForConditionalOperation<TSourceLogRecord, TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, srcLogRecord, ref stackCtx, currentAddress, minAddress, maxAddress, out status, out needIO))
                         return Status.CreateFound();
+                    if (GivesUpWhenTailBusy(status, ref operationState))
+                        return new(StatusCode.Canceled);
                 }
                 while (sessionFunctions.Store.HandleImmediateNonPendingRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(status, sessionFunctions));
 

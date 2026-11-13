@@ -93,7 +93,22 @@ namespace Tsavorite.core
 
         long readCacheInsertsLanded, readCacheInsertsHeld, readCacheInsertsBelowMemory, readCacheInsertsLost, readCacheInsertsUnderEpoch;
 
-        long conditionalInsertsUnderEpoch;
+        long conditionalInsertsUnderEpoch, conditionalInsertsGaveUpTailBusy;
+
+        // A copy that asked to give up (kGivesUpWhenTailBusy) ends on a busy tail instead of spinning or waiting: its source still holds the record.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool GivesUpWhenTailBusy<TInput, TOutput, TContext>(OperationStatus status, ref OperationState<TInput, TOutput, TContext> operationState)
+        {
+            if ((operationState.operationFlags & OperationState<TInput, TOutput, TContext>.kGivesUpWhenTailBusy) == 0
+                    || status is not (OperationStatus.RETRY_LATER or OperationStatus.ALLOCATE_FAILED))
+                return false;
+            operationState.flushEvent = default;
+            _ = System.Threading.Interlocked.Increment(ref conditionalInsertsGaveUpTailBusy);
+            return true;
+        }
+
+        /// <summary>Conditional log inserts that asked to give up on a busy tail and did (RETRY_LATER or ALLOCATE_FAILED): the record was not written.</summary>
+        public long ConditionalInsertsGaveUpTailBusy => System.Threading.Interlocked.Read(ref conditionalInsertsGaveUpTailBusy);
 
         internal Status RefuseConditionalInsertUnderEpoch()
         {

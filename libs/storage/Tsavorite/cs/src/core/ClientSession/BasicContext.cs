@@ -524,6 +524,14 @@ namespace Tsavorite.core
         public Status ConditionalInsert(TKey key, ReadOnlySpan<byte> value, long sinceAddress)
             => ConditionalInsertBytes(key, value, tombstone: false, sinceAddress);
 
+        /// <summary>
+        /// The same insert as <see cref="ConditionalInsert(TKey, ReadOnlySpan{byte}, long)"/>, for a copy whose source keeps the record (a cache warm):
+        /// with <paramref name="givesUpWhenTailBusy"/>, a busy tail (RETRY_LATER, or no page to allocate) ends it Canceled, nothing written,
+        /// instead of retrying in place or waiting on a flush. Counted in <see cref="TsavoriteKV{TStoreFunctions, TAllocator}.ConditionalInsertsGaveUpTailBusy"/>.
+        /// </summary>
+        public Status ConditionalInsert(TKey key, ReadOnlySpan<byte> value, long sinceAddress, bool givesUpWhenTailBusy)
+            => ConditionalInsertBytes(key, value, tombstone: false, sinceAddress, givesUpWhenTailBusy);
+
         /// <summary>The same test as <see cref="ConditionalInsert(TKey, ReadOnlySpan{byte}, long)"/>, appending a tombstone for the key.</summary>
         public Status ConditionalInsertTombstone(TKey key, long sinceAddress)
             => ConditionalInsertBytes(key, default, tombstone: true, sinceAddress);
@@ -563,7 +571,7 @@ namespace Tsavorite.core
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private Status ConditionalInsertBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress)
+        private Status ConditionalInsertBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress, bool givesUpWhenTailBusy = false)
         {
             // The same refusal as the read-cache insert above: under this store's epoch the Resume would nest (mesh 11-12 wedge).
             if (store.epoch.ThisInstanceProtected())
@@ -572,7 +580,7 @@ namespace Tsavorite.core
             try
             {
                 return store.ConditionalInsertBytes<TKey, TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions,
-                        BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(sessionFunctions, key, value, tombstone, sinceAddress);
+                        BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(sessionFunctions, key, value, tombstone, sinceAddress, givesUpWhenTailBusy);
             }
             finally
             {
