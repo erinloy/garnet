@@ -528,6 +528,8 @@ namespace Tsavorite.devices
                     {
                         if (t.IsFaulted)
                         {
+                            // observed here: the queued reads already failed with it; unobserved, the finalizer logs it as a crash (webfrontend 11-13)
+                            _ = t.Exception;
                             _ = Interlocked.Increment(ref readsOfAbsentSegments);
                             _ = blobs.TryRemove(new KeyValuePair<int, BlobEntry>(segmentId, entry));
                         }
@@ -574,6 +576,7 @@ namespace Tsavorite.devices
             ReadFromBlobUnsafeAsync(blobEntry, sourceAddress, destinationAddress, readLength, id)
                 .ContinueWith((Task t) =>
                 {
+                    if (t.IsFaulted) _ = t.Exception;   // observed even when a cancel-all already answered it (webfrontend 11-13: 73 unobserved)
                     if (pendingReadWriteOperations.TryRemove(id, out ReadWriteRequestInfo request))
                     {
                         request.Cancel?.Dispose();
@@ -783,6 +786,7 @@ namespace Tsavorite.devices
             WriteToBlobAsync(blobEntry, sourceAddress, (long)destinationAddress, numBytesToWrite, id)
                 .ContinueWith((Task t) =>
                 {
+                    if (t.IsFaulted) _ = t.Exception;   // observed even when a cancel-all already answered it (webfrontend 11-13: 73 unobserved)
                     if (pendingReadWriteOperations.TryRemove(id, out ReadWriteRequestInfo request))
                     {
                         request.Cancel?.Dispose();
