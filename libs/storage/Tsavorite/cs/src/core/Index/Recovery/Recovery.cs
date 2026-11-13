@@ -476,6 +476,7 @@ namespace Tsavorite.core
                 Reset();
             }
 
+            ResetRecoverySkippedKeys();
             var phase = System.Diagnostics.Stopwatch.StartNew();
             if (!GetInitialRecoveryAddress(recoveredICInfo, recoveredHLCInfo, out long recoverFromAddress))
             {
@@ -543,6 +544,7 @@ namespace Tsavorite.core
             }
 
             var replayMs = phase.ElapsedMilliseconds;
+            RefuseIfRecoverySkippedKeys();   // every page read and flush of both replay passes is done here, so nothing lands after the throw
             phase.Restart();
             DoPostRecovery(recoveredICInfo, recoveredHLCInfo, tailAddress, finalHeadAddress, readOnlyAddress);
             LastRecoveryPhases = new(indexMs, replayMs, untilAddress - recoverFromAddress, phase.ElapsedMilliseconds);
@@ -1393,8 +1395,9 @@ namespace Tsavorite.core
 
                 if (!info.Invalid && !logRecord.IsPinnedKey)
                 {
-                    // A key over the inline ceiling cannot be read here (no object map at recovery): skip and count it.
-                    System.Threading.Interlocked.Increment(ref RecoveryOverflowKeys.SkippedCount);
+                    // A key over the inline ceiling cannot be read here (no object map at recovery): skip, count and name it. Its key's entry stays at
+                    // the prior version, so a store that refuses such skips throws once replay's I/O is done (RefuseIfRecoverySkippedKeys).
+                    NoteRecoverySkippedKey(pageStartLogicalAddress + recordOffset);
                     recordOffset += logRecord.AllocatedSize;
                     continue;
                 }
