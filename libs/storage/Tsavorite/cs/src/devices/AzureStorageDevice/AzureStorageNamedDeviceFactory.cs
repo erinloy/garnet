@@ -70,8 +70,10 @@ namespace Tsavorite.devices
 
             HashSet<string> directories = new();
             var options = new GetBlobsOptions() { Prefix = $"{dir.Prefix}/" };
+            // The listing carries each blob's LastModified: a GetProperties per blob was one request each, and a blob deleted between
+            // the listing and its own request (a writer pruning a checkpoint a replica lists) 404'd the whole listing.
             foreach (var item in client.GetBlobs(options)
-                .OrderByDescending(f => client.GetBlobClient(f.Name).GetProperties().Value.LastModified))
+                .OrderByDescending(f => f.Properties.LastModified ?? System.DateTimeOffset.MinValue))
             {
                 // get the directory name
                 var name = item.Name.Substring(dir.Prefix.Length + 1);
