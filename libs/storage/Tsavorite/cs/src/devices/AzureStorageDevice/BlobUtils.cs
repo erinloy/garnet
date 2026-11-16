@@ -38,6 +38,11 @@ namespace Tsavorite.devices
                 return true;
             }
 
+            if (exception is BlobReadResumeRefusedException)
+            {
+                return true;
+            }
+
             // Empirically observed: timeouts on synchronous calls
             if (exception.InnerException is TimeoutException)
             {
@@ -127,4 +132,8 @@ namespace Tsavorite.devices
             || statusCode == 503  //503 Service Unavailable
             || statusCode == 504); //504 Gateway Timeout
     }
+
+    /// <summary>ZILTCH 11-16: an unconditioned read whose SDK stream resume was refused (412) because the blob was appended to; transient.</summary>
+    sealed class BlobReadResumeRefusedException(Azure.RequestFailedException inner)
+        : System.IO.IOException($"a blob read's stream resume was refused ({inner.Status} {inner.ErrorCode}): the blob changed under the read", inner);
 }

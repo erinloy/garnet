@@ -743,14 +743,23 @@ namespace Tsavorite.devices
                             {
                                 var client = (numAttempts > 1 || length > MAX_AGGRESSIVE_TRANSFER) ? blob.PageBlob.Default : blob.PageBlob.Aggressive;
 
-                                var response = await client.DownloadStreamingAsync(
-                                    range: new Azure.HttpRange(sourceAddress + offset, length),
-                                    conditions: null,
-                                    rangeGetContentHash: false,
-                                    cancellationToken: token)
-                                    .ConfigureAwait(false);
+                                try
+                                {
+                                    var response = await client.DownloadStreamingAsync(
+                                        range: new Azure.HttpRange(sourceAddress + offset, length),
+                                        conditions: null,
+                                        rangeGetContentHash: false,
+                                        cancellationToken: token)
+                                        .ConfigureAwait(false);
 
-                                await response.Value.Content.CopyToAsync(stream, token).ConfigureAwait(false);
+                                    await response.Value.Content.CopyToAsync(stream, token).ConfigureAwait(false);
+                                }
+                                catch (Azure.RequestFailedException e) when (BlobUtilsV12.PreconditionFailed(e))
+                                {
+                                    // ZILTCH 11-16: the SDK resumes a broken stream If-Match its first ETag; a writer's append moved it (webfrontend hlog.126).
+                                    // This read set no condition, and the range it asks is below the writer's flush, so a fresh attempt reads the same bytes.
+                                    throw new BlobReadResumeRefusedException(e);
+                                }
                             }
 
                             if (stream.Position != offset + length)
