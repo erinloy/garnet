@@ -2691,15 +2691,30 @@ namespace Tsavorite.core
                 // not deliver the record; after pendingReadNoProgressLimit of them the read fails instead of spinning.
                 if (prevAddressToRead == ctx.logicalAddress)
                 {
+                    // A HEADER NO PAGE CAN HOLD IS NOT A RECORD. Records never span a page (HandlePageOverflow; an object's bytes are
+                    // in the object log), so a length past its page's end is a link into another record's bytes, 8-aligned so the
+                    // alignment test above passes it (webfrontend 11-16, log:137977485728: 14,418,320 bytes asked 612,768 into a
+                    // 1 MiB page; the read is clamped at the page end, so it re-read the same 435,808 bytes until the no-progress
+                    // limit). It fails at once and names the link, never read as not found: a caller judging liveness by the
+                    // answer would take a lost record for an absent one.
+                    if (GetOffsetOnPage(ctx.logicalAddress) + (long)prevLengthToRead > PageSize)
+                        throw new TsavoriteRecordLostException(
+                            $"Pending read of {AddressString(ctx.logicalAddress)} found no record: its header asks {prevLengthToRead} byte(s), " +
+                            $"{GetOffsetOnPage(ctx.logicalAddress)} byte(s) into a {PageSize}-byte page that leaves room for {PageSize - GetOffsetOnPage(ctx.logicalAddress)}; " +
+                            "no record spans a page, so this address is inside another record's bytes. It was reached from " +
+                            (ctx.linkedFromAddress == kInvalidAddress ? "the hash index" : $"the previous-address link of the record at {AddressString(ctx.linkedFromAddress)}") +
+                            ". The read fails rather than answering not found.",
+                            ctx.logicalAddress, ctx.linkedFromAddress);
                     var available = ctx.record?.available_bytes ?? 0;
                     if (ctx.noProgressAddress == prevAddressToRead && available <= ctx.noProgressAvailable)
                     {
                         if (++ctx.noProgressCount >= pendingReadNoProgressLimit)
-                            throw new TsavoriteException(
+                            throw new TsavoriteRecordLostException(
                                 $"Pending read of {AddressString(ctx.logicalAddress)} made no progress: {ctx.noProgressCount} read(s) of " +
                                 $"this address delivered {available} usable byte(s) each ({ctx.deviceBytes} transferred, no device error), " +
                                 $"short of the {prevLengthToRead} byte(s) the record's header asks for. {nameof(LogSettings.PendingReadNoProgressLimit)} is {pendingReadNoProgressLimit}; " +
-                                "the read fails rather than re-issuing indefinitely.");
+                                "the read fails rather than re-issuing indefinitely.",
+                            ctx.logicalAddress, ctx.linkedFromAddress);
                     }
                     else
                     {
@@ -2713,6 +2728,7 @@ namespace Tsavorite.core
                 // previous record in the chain). If that address is in range, issue the read; else fall through to
                 // "IO complete" and let ContinuePending* detect the below-range case.
                 var fromAddress = ctx.logicalAddress;
+                if (prevAddressToRead != fromAddress) ctx.linkedFromAddress = fromAddress;
                 ctx.logicalAddress = prevAddressToRead;
                 if (IsReadCache(ctx.logicalAddress) || AbsoluteAddress(ctx.logicalAddress) >= GetTailAddress())
                     ctx.logicalAddress = kInvalidAddress;   // a broken link, as above: resolve below range instead of issuing it

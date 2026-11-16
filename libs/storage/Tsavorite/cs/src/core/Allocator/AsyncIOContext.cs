@@ -80,6 +80,10 @@ namespace Tsavorite.core
         internal int noProgressAvailable;
         internal int noProgressCount;
 
+        /// <summary>The record whose previous-address link this op is following (kInvalidAddress on the op's
+        /// first read, which came from the hash index): the record a corrupt link is named by.</summary>
+        internal long linkedFromAddress;
+
         /// <summary>
         /// Reset all fields to default (for pooling). The receiver instance stays alive so the
         /// pool keeps a stable identity; only the fields change.
@@ -108,6 +112,7 @@ namespace Tsavorite.core
             noProgressAddress = kInvalidAddress;
             noProgressAvailable = 0;
             noProgressCount = 0;
+            linkedFromAddress = kInvalidAddress;
         }
 
         /// <summary>
