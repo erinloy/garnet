@@ -2783,12 +2783,8 @@ namespace Tsavorite.core
             // error code) must read as "nothing usable", never as a negative length the verify below would reinterpret.
             ctx.record.available_bytes = Math.Max(0, (int)numBytes - ctx.record.valid_offset);
 
-            if (ctx.record.available_bytes >= RecordInfo.Size)
-            {
-                var recordInfo = *(RecordInfo*)ctx.record.GetValidPointer();
-                Debug.Assert(!recordInfo.Invalid,
-                    $"Invalid records should not be in the hash chain for pending IO; address {ctx.logicalAddress}, recordInfo {recordInfo}");
-            }
+            // No assert on the bytes' Invalid bit: they are device input, not an invariant. TryVerifyOrReissuePendingRead follows an
+            // invalid record's previous address, as Release always did; asserting here killed the Debug host on a lost link (echo #90450).
 
         Dispatch:
             if (ctx.completionEvent is null)
