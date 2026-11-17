@@ -37,6 +37,22 @@ namespace Tsavorite.core
         /// <summary>Next address for iteration</summary>
         protected long nextAddress;
 
+        /// <summary>The start of the last record this scan stepped from, or kInvalidAddress before the first.</summary>
+        private long scannedFrom;
+
+        /// <summary>Throws <see cref="TsavoriteRecordLostException"/> when the non-null words at <paramref name="physicalAddress"/> cannot head a
+        /// record (<see cref="RecordHeaderSanity"/>). A scan steps by each record's length, so bytes that are not a header (a torn or foreign
+        /// flush on the page) would send it into a record's body and on to the next page: the records it stepped over would never be seen,
+        /// and a compaction that shifts begin past them would drop them with no count. The scan stops by name instead.</summary>
+        protected unsafe void RefuseANonHeader(long physicalAddress, long logicalAddress, long offsetOnPage, int pageSize)
+        {
+            if (!RecordHeaderSanity.IsRecordHeader(*(long*)physicalAddress, *(ulong*)(physicalAddress + RecordInfo.Size), logicalAddress,
+                    (int)offsetOnPage, pageSize, out var reason))
+                throw new TsavoriteRecordLostException($"scan at log:{logicalAddress} (stepped from log:{scannedFrom}) finds no record header: {reason}. "
+                    + "The scan stops here rather than step over the page's records unseen", logicalAddress, scannedFrom);
+            scannedFrom = logicalAddress;
+        }
+
         /// <summary><see cref="CountdownEvent"/> vector for waiting for frame-load completion.</summary>
         /// <remarks>This array is in parallel with <see cref="loadCTSs"/>, <see cref="loadedPages"/>, and <see cref="nextLoadedPages"/>.</remarks>
         private CountdownEvent[] loadCompletionEvents;

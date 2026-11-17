@@ -180,6 +180,8 @@ namespace Tsavorite.core
 
             while (totalSizes <= offset)
             {
+                if (*(long*)physicalAddress != 0 && logicalAddress - offset + totalSizes < hlogBase.SafeReadOnlyAddress)
+                    RefuseANonHeader(physicalAddress, logicalAddress - offset + totalSizes, totalSizes, hlogBase.PageSize);
                 var allocatedSize = new LogRecord(physicalAddress).AllocatedSize;
                 if (totalSizes + allocatedSize > offset)
                     break;
@@ -227,6 +229,8 @@ namespace Tsavorite.core
                     var offset = hlogBase.GetOffsetOnPage(currentAddress);
                     var physicalAddress = GetPhysicalAddressAndAllocatedSize(currentAddress, headAddress, currentPage, offset, out var allocatedSize);
                     var recordInfo = LogRecord.GetInfo(physicalAddress);
+                    if (offset != 0 && !recordInfo.IsNull && currentAddress < hlogBase.SafeReadOnlyAddress)   // a writer is still filling headers above it
+                        RefuseANonHeader(physicalAddress, currentAddress, offset, hlogBase.PageSize);
 
                     // If record does not fit on page, skip to the next page. Offset should always be at least PageHeader.Size; if it's zero, it means
                     // our record size aligned perfectly with end of page, so we must move to the next page (skipping its PageHeader).
