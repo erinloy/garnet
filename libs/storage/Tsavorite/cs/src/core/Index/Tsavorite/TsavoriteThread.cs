@@ -111,7 +111,22 @@ namespace Tsavorite.core
                 // Verify the device read on the run thread (the completion thread only enqueued the raw buffer).
                 // On an incomplete record or key mismatch this re-issues the next chain read on this same op; the
                 // op is then back in flight, so leave it pending and let its next completion drain it.
-                if (!hlogBase.TryVerifyOrReissuePendingRead(ref request))
+                bool verified;
+                try
+                {
+                    verified = hlogBase.TryVerifyOrReissuePendingRead(ref request);
+                }
+                catch (TsavoriteRecordLostException lost) when (op.pendingState.type == OperationType.CONDITIONAL_INSERT)
+                {
+                    // A LOST LINK ABOVE A COMPACTED RECORD CARRIES IT. The liveness walk asks "is there a newer record of this key
+                    // above the source?" and its chain broke on the way down. A lost record is not an absent one, but failing here
+                    // failed the whole pass on every run (prod webfrontend 11-16, one link), and dropping the source loses the key.
+                    // So it reads as "not found above", the source goes to the tail, and the carry is named (echo #90162).
+                    NoteCarriedPastLostLink(op.pendingState.requestKey.KeyBytes, op.baseOperationState.originalAddress, lost);
+                    request.logicalAddress = LogAddress.kInvalidAddress;
+                    verified = true;
+                }
+                if (!verified)
                 {
                     stillPending = true;
                     return;

@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -17,6 +18,24 @@ namespace Tsavorite.core
 
         /// <summary>Records a lookup compaction met whose key has no hash-index entry: unreachable by any read, so dropped and never linked.</summary>
         public long CompactionSourcesWithoutTag => Interlocked.Read(ref compactionSourcesWithoutTag);
+
+        long compactionCarriedPastLostLinks;
+
+        /// <summary>Records a lookup compaction carried to the tail because its liveness walk met a lost link
+        /// (<see cref="TsavoriteRecordLostException"/>) above them.</summary>
+        public long CompactionCarriedPastLostLinks => Interlocked.Read(ref compactionCarriedPastLostLinks);
+
+        /// <summary>Called once for each record carried past a lost link, on the compacting session's thread, before the carry is
+        /// written. A throw from it fails the compaction as the lost link used to.</summary>
+        public CompactionCarriedPastLostLink OnCompactionCarriedPastLostLink { get; set; }
+
+        /// <summary>A conditional insert's liveness walk lost its chain: it reads as "not found above", so the source is carried (rg 11-17,
+        /// prod webfrontend's log-budget pass failed on one lost link every time; echo #90162: carried, never dropped, always named).</summary>
+        internal void NoteCarriedPastLostLink(ReadOnlySpan<byte> key, long sourceAddress, TsavoriteRecordLostException lost)
+        {
+            _ = Interlocked.Increment(ref compactionCarriedPastLostLinks);
+            OnCompactionCarriedPastLostLink?.Invoke(key, sourceAddress, lost);
+        }
 
         /// <summary>
         /// Copy a record to the tail of the log after caller has verified it does not exist within a specified range.
