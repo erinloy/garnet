@@ -312,6 +312,13 @@ namespace Tsavorite.devices
         /// </summary>
         internal IBlobManager BlobManager { get; set; }
 
+        /// <summary>
+        /// ZILTCH (echo #90130 (1)): asked before EVERY page PUT, each portion and each retry; a non-null answer refuses that PUT
+        /// with <see cref="DeviceWriteFencedException"/>, so no byte reaches the blob once the writer may no longer own it. Our
+        /// devices run with no fork lease (underLease false), so the fork's own per-attempt lease check never runs; this does.
+        /// </summary>
+        public Func<string> WriteFence { get; set; }
+
         string GetSegmentBlobName(int segmentId) => GetSegmentFilename(blobName, segmentId);
 
         // ZILTCH: a hung operation is abandoned by its own token and fails as itself. Terminating the device instead cancelled
@@ -669,6 +676,11 @@ namespace Tsavorite.devices
                     true,
                     async (numAttempts) =>
                     {
+                        if (WriteFence?.Invoke() is { } fenced)
+                        {
+                            throw new DeviceWriteFencedException(blobEntry.PageBlob.Default.Name, destinationAddress + offset, fenced);
+                        }
+
                         if (numAttempts > 0)
                         {
                             stream.Seek(originalStreamPosition, SeekOrigin.Begin); // must go back to original position before retry

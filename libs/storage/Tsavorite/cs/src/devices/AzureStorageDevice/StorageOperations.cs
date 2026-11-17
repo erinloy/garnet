@@ -75,6 +75,12 @@ namespace Tsavorite.devices
 
                         return;
                     }
+                    catch (DeviceWriteFencedException)
+                    {
+                        // ZILTCH (echo #90130 (1)): the writer fence refused the attempt. Never retried here and never terminating:
+                        // the write fails as itself, and a writer whose lease is taken back writes again on the next write.
+                        throw;
+                    }
                     catch (OperationCanceledException e) when (operationToken.IsCancellationRequested && !StorageErrorHandler.IsTerminated)
                     {
                         // ZILTCH: this one operation was abandoned (the device's hang limit); it fails as itself and the device lives on.
