@@ -215,6 +215,17 @@ namespace Tsavorite.core
             return false;
         }
 
+        /// <summary>
+        /// The end of the state machine running now, however it ends; complete at once when none runs. It never cancels or observes
+        /// the run: a caller the driver refused (one state machine at a time) waits on it and asks again, and the run's own caller is
+        /// the one told how it ended. Unlike <see cref="CompleteAsync"/>, which cancels the shared run when its token is cancelled.
+        /// </summary>
+        public async Task EndOfRunningAsync()
+        {
+            if (stateMachineCompleted is { } running)
+                await ((Task)running.Task).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+
         /// <summary>Waits for the run <paramref name="completion"/> was handed out for, whether or not it has ended.</summary>
         internal static async Task<bool> CompleteRunAsync(TaskCompletionSource<bool> completion, CancellationToken token = default)
         {
