@@ -325,5 +325,106 @@ namespace Tsavorite.test
                 DeleteDirectory(MethodTestDir);
             }
         }
+
+        /// <summary>
+        /// A TOMBSTONE BEHIND THE LOST LINK: THE CARRY REVIVES A DELETED KEY, AND THE ROW NAMES IT (echo #90162).
+        ///
+        /// <para>Key 0 is written at R1 (in the compacted range), deleted at T above the compaction's end, and written again at R2 above T,
+        /// whose header runs past its page. The walk for R1 reaches R2 first and loses the chain there, so it never sees T: R1 is carried,
+        /// and key 0, which T deleted, reads R1's value again. Carry is still the default, since a drop cannot be undone, but the row
+        /// (key, R1, R2, the index) is what lets the cell reconcile the key once the span is judged.</para>
+        /// </summary>
+        [Test]
+        [Category("TsavoriteKV"), Category("Compaction")]
+        public void A_tombstone_behind_a_lost_link_is_revived_by_the_carry_and_the_row_names_the_key()
+        {
+            DeleteDirectory(MethodTestDir);
+            var device = new CorruptingDevice(Devices.CreateLogDevice(Path.Join(MethodTestDir, "corrupting.log"), deleteOnClose: true));
+            var store = new TsavoriteKV<StructStoreFunctions, StructAllocator>(
+                new()
+                {
+                    IndexSize = 1L << 26,
+                    LogDevice = device,
+                    LogMemorySize = 1L << 15,
+                    PageSize = MinKvLogPageSize,
+                }, StoreFunctions.Create(KeyStruct.Comparer.Instance, SpanByteRecordTriggers.Instance),
+                (allocatorSettings, storeFunctions) => new(allocatorSettings, storeFunctions));
+            var session = store.NewSession<KeyStruct, InputStruct, OutputStruct, Empty, QuietReadFunctions>(new QuietReadFunctions());
+            try
+            {
+                var bContext = session.BasicContext;
+                void Write(int k, int v)
+                {
+                    var key = new KeyStruct { kfield1 = k, kfield2 = k + 1 };
+                    var value = new ValueStruct { vfield1 = v, vfield2 = v + 1 };
+                    _ = bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default);
+                }
+                (Status status, OutputStruct output, long address) Read(int k, bool onDisk = true)
+                {
+                    var key = new KeyStruct { kfield1 = k, kfield2 = k + 1 };
+                    InputStruct input = default;
+                    OutputStruct output = default;
+                    ReadOptions readOptions = default;
+                    var status = bContext.Read(key, ref input, ref output, ref readOptions, out var recordMetadata, Empty.Default);
+                    if (!onDisk || !status.IsPending)
+                        return (status, output, recordMetadata.Address);
+                    _ = bContext.CompletePendingWithOutputs(out var outputs, wait: true);
+                    (status, output) = GetSinglePendingResult(outputs, out var metadata);
+                    return (status, output, metadata.Address);
+                }
+
+                Write(0, 7);                            // R1, in the compacted range
+                for (var i = 1; i < Records; i++)
+                    Write(i, i);
+                var deleted = new KeyStruct { kfield1 = 0, kfield2 = 1 };
+                _ = bContext.Delete(deleted, Empty.Default);   // T, above the compaction's end
+                for (var i = Records; i < 2 * Records; i++)
+                    Write(i, i);
+                Write(0, 8);                            // R2, above T: the walk meets it first
+                for (var i = 2 * Records; i < 3 * Records; i++)
+                    Write(i, i);
+                _ = bContext.CompletePending(true);
+
+                var r1 = store.Log.BeginAddress;
+                var (found, newest, r2) = Read(0);
+                ClassicAssert.IsTrue(found.Found && newest.value.vfield1 == 8, "the control: key 0 reads R2's value before the device is armed");
+                var until = Read(Records / 2).address;
+                ClassicAssert.Less(r1, until, "the control: R1 is in the compacted range");
+                ClassicAssert.Less(until, r2, "the control: R2 (and T below it) is above the compaction's end");
+                ClassicAssert.Less(r2, store.Log.HeadAddress, "the control: R2 is on disk");
+
+                var rows = new System.Collections.Generic.List<(long key, long source, long address, long linkedFrom)>();
+                store.OnCompactionCarriedPastLostLink = (key, source, lost) =>
+                    rows.Add((MemoryMarshal.Read<KeyStruct>(key).kfield1, source, lost.Address, lost.LinkedFrom));
+                device.InvalidAddress = long.MinValue / 2;
+                device.OversizedAddress = r2;
+                device.Armed = true;
+
+                Exception thrown = null;
+                var completion = Task.Factory.StartNew(() =>
+                {
+                    try { _ = session.Compact(until, CompactionType.Lookup); }
+                    catch (Exception ex) { thrown = ex; }
+                }, TaskCreationOptions.LongRunning);
+                ClassicAssert.IsTrue(completion.Wait(Deadline), $"the compaction did not return within {Deadline.TotalSeconds:F0} s after {device.ArmedReads} device read(s)");
+                device.Armed = false;
+
+                ClassicAssert.IsNull(thrown, $"a lost link above a compacted record carries it: {thrown}");
+                ClassicAssert.AreEqual(1, rows.Count, "one carry, one row");
+                ClassicAssert.AreEqual((0L, r1, r2, 0L), rows[0], "the row names the deleted key, the carried record, the lost address and its link");
+
+                var (after, revived, _) = Read(0, onDisk: false);
+                ClassicAssert.IsTrue(after.Found, "the carry revived key 0, which T deleted: the cost the row names");
+                ClassicAssert.AreEqual(7, revived.value.vfield1, "the revived value is R1's");
+            }
+            finally
+            {
+                device.Armed = false;
+                session.Dispose();
+                store.Dispose();
+                device.Dispose();
+                DeleteDirectory(MethodTestDir);
+            }
+        }
     }
 }
