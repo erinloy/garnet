@@ -477,6 +477,7 @@ namespace Tsavorite.core
             }
 
             ResetRecoverySkippedKeys();
+            LastRecoveryTrustedCleanMark = false;
             var phase = System.Diagnostics.Stopwatch.StartNew();
             if (!GetInitialRecoveryAddress(recoveredICInfo, recoveredHLCInfo, out long recoverFromAddress))
             {
@@ -484,7 +485,14 @@ namespace Tsavorite.core
                 if (LockIndexResidentAtRecovery)
                     _ = LockIndexResident();   // before the bucket pass: a trimmed table makes that pass a hard fault per page
                 var scrubClock = System.Diagnostics.Stopwatch.StartNew();
-                var scrubbed = ScrubEntriesAtOrBeyond(untilAddress);
+                // A clean mark whose highest address is below the log's end proves the pass has nothing to clear; without one it runs.
+                LastRecoveryTrustedCleanMark = recoveredICInfo.info.clean && recoveredICInfo.info.cleanMaxAddress < untilAddress;
+                if (recoveredICInfo.info.clean && !LastRecoveryTrustedCleanMark)
+                    logger?.LogWarning("Index checkpoint {token} is clean but names address {max}, at or past the recovered log's end {final}: the scrub pass runs",
+                        recoveredICInfo.info.token, LogAddress.AddressString(recoveredICInfo.info.cleanMaxAddress), LogAddress.AddressString(untilAddress));
+                if (LastRecoveryTrustedCleanMark)
+                    (recoveryMisalignedEntries, LastMisalignedEntries) = (0, []);
+                var scrubbed = LastRecoveryTrustedCleanMark ? 0 : ScrubEntriesAtOrBeyond(untilAddress);
                 LastScrubMs = scrubClock.ElapsedMilliseconds;
                 recoveryScrubbedEntries = scrubbed;
                 if (scrubbed > 0)

@@ -444,18 +444,13 @@ namespace Tsavorite.core
         /// <param name="offset"></param>
         /// <param name="numBytesWritten"></param>
         public void BeginCheckpoint(IDevice device, ulong offset, out ulong numBytesWritten)
-            => BeginCheckpoint(device, offset, out numBytesWritten, false, default, default);
+            => BeginCheckpoint(device, offset, out numBytesWritten, null, null);
 
         /// <summary>
-        /// Internal persistence API
+        /// Internal persistence API: with a <paramref name="fix"/>, each level is copied, fixed and written from the copy, at most
+        /// <see cref="TsavoriteBase.CheckpointCopiesInFlight"/> copies at a time, issued off the caller's thread.
         /// </summary>
-        /// <param name="device"></param>
-        /// <param name="offset"></param>
-        /// <param name="numBytesWritten"></param>
-        /// <param name="useReadCache"></param>
-        /// <param name="skipReadCache"></param>
-        /// <param name="epoch"></param>
-        internal unsafe void BeginCheckpoint(IDevice device, ulong offset, out ulong numBytesWritten, bool useReadCache, SkipReadCache skipReadCache, LightEpoch epoch)
+        internal unsafe void BeginCheckpoint(IDevice device, ulong offset, out ulong numBytesWritten, FixCheckpointBuckets fix, LightEpoch epoch)
         {
             int localCount = count;
             int recordsCountInLastLevel = localCount & PageSizeMask;
@@ -468,53 +463,64 @@ namespace Tsavorite.core
             uint lastLevelSize = (uint)recordsCountInLastLevel * (uint)RecordSize;
 
             int sectorSize = (int)device.SectorSize;
+            uint WriteSize(int i) => (uint)((i == numCompleteLevels) ? (lastLevelSize + (sectorSize - 1)) & ~(sectorSize - 1) : alignedPageSize);
             numBytesWritten = 0;
             for (int i = 0; i < numLevels; i++)
+                numBytesWritten += WriteSize(i);
+
+            if (fix is null)
+                Issue();
+            else
+                _ = Task.Run(Issue);
+
+            void Issue()
             {
-                OverflowPagesFlushAsyncResult result = default;
-
-                uint writeSize = (uint)((i == numCompleteLevels) ? (lastLevelSize + (sectorSize - 1)) & ~(sectorSize - 1) : alignedPageSize);
-
-                var source = pointers[i] != IntPtr.Zero ? pointers[i] : EmptyLevel(writeSize);
-                if (!useReadCache)
+                var copies = fix is null ? null : new SemaphoreSlim(TsavoriteBase.CheckpointCopiesInFlight);
+                ulong at = 0;
+                for (int i = 0; i < numLevels; i++)
                 {
-                    device.WriteAsync(source, offset + numBytesWritten, writeSize, AsyncFlushCallback, result);
-                }
-                else
-                {
-                    result.mem = new SectorAlignedMemory((int)writeSize, (int)device.SectorSize);
-                    bool prot = false;
-                    if (!epoch.ThisInstanceProtected())
+                    OverflowPagesFlushAsyncResult result = default;
+                    uint writeSize = WriteSize(i);
+                    var source = pointers[i] != IntPtr.Zero ? pointers[i] : EmptyLevel(writeSize);
+                    if (fix is null)
                     {
-                        prot = true;
-                        epoch.Resume();
+                        device.WriteAsync(source, offset + at, writeSize, AsyncFlushCallback, result);
                     }
-
-                    try
+                    else
                     {
-                        Buffer.MemoryCopy((void*)source, result.mem.aligned_pointer, writeSize, writeSize);
-                        int j = 0;
-                        if (i == 0) j += AllocateChunkSize * RecordSize;
-                        for (; j < writeSize; j += sizeof(HashBucket))
+                        copies.Wait();
+                        result.copies = copies;
+                        result.mem = new SectorAlignedMemory((int)writeSize, (int)device.SectorSize);
+                        bool prot = false;
+                        if (!epoch.ThisInstanceProtected())
                         {
-                            skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)source + j));
+                            prot = true;
+                            epoch.Resume();
                         }
-                    }
-                    catch (ReadCacheChainLostException ex)
-                    {
-                        // The checkpoint fails through its task, as the main index's FlushRunner does; levels not yet issued are never written.
-                        result.mem.Dispose();
-                        _ = checkpointTcs.TrySetException(ex);
-                        return;
-                    }
-                    finally
-                    {
-                        if (prot) epoch.Suspend();
-                    }
 
-                    device.WriteAsync((IntPtr)result.mem.aligned_pointer, offset + numBytesWritten, writeSize, AsyncFlushCallback, result);
+                        try
+                        {
+                            Buffer.MemoryCopy((void*)source, result.mem.aligned_pointer, writeSize, writeSize);
+                            int skip = i == 0 ? AllocateChunkSize * RecordSize : 0;
+                            fix((HashBucket*)(result.mem.aligned_pointer + skip), (HashBucket*)((byte*)source + skip), (writeSize - skip) / sizeof(HashBucket));
+                        }
+                        catch (Exception ex)
+                        {
+                            // The checkpoint fails through its task, as the main index's FlushRunner does; levels not yet issued are never written.
+                            result.mem.Dispose();
+                            _ = copies.Release();
+                            _ = checkpointTcs.TrySetException(ex);
+                            return;
+                        }
+                        finally
+                        {
+                            if (prot) epoch.Suspend();
+                        }
+
+                        device.WriteAsync((IntPtr)result.mem.aligned_pointer, offset + at, writeSize, AsyncFlushCallback, result);
+                    }
+                    at += writeSize;
                 }
-                numBytesWritten += writeSize;
             }
         }
 
@@ -528,6 +534,7 @@ namespace Tsavorite.core
 
             var mem = ((OverflowPagesFlushAsyncResult)context).mem;
             mem?.Dispose();
+            _ = ((OverflowPagesFlushAsyncResult)context).copies?.Release();
 
             if (Interlocked.Decrement(ref checkpointCallbackCount) == 0)
             {

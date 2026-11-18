@@ -3,6 +3,7 @@
 
 using System;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace Tsavorite.core
 {
@@ -60,6 +61,15 @@ namespace Tsavorite.core
 
         internal void WriteIndexMetaInfo()
         {
+            // The mark rides in the commit itself: a kill before this write leaves no checkpoint to adopt, marked or not.
+            if (cleanArmed)
+            {
+                var census = EndCleanCheckpoint();
+                (_indexCheckpoint.info.clean, _indexCheckpoint.info.cleanMaxAddress) = (census.Clean, census.MaxAddress);
+                if (census.Misaligned > 0)
+                    logger?.LogWarning("Index checkpoint {token} cleared {misaligned} hash index entr(ies) whose address is off the {alignment}-byte record alignment (a corrupt link each)",
+                        _indexCheckpointToken, census.Misaligned, Constants.kRecordAlignment);
+            }
             checkpointManager.CommitIndexCheckpoint(_indexCheckpointToken, _indexCheckpoint.info.ToByteArray());
         }
 

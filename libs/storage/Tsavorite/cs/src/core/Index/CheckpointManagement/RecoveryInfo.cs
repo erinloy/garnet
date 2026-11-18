@@ -346,6 +346,13 @@ namespace Tsavorite.core
         public long startLogicalAddress;
         public long finalLogicalAddress;
 
+        /// <summary>The clean mark (<see cref="TsavoriteBase.WritesCleanIndexCheckpoints"/>): the files hold no entry recovery's bucket
+        /// passes would change, and no entry names an address at or past <see cref="cleanMaxAddress"/> + 1. Appended after the nine
+        /// lines a reader before the mark reads, under its own checksum, so that reader opens the checkpoint and walks it as before.</summary>
+        public bool clean;
+        public long cleanMaxAddress;
+        const string CleanMarkLine = "clean-index-checkpoint";
+
         public void Initialize(Guid token, long _size)
         {
             this.token = token;
@@ -355,6 +362,8 @@ namespace Tsavorite.core
             startLogicalAddress = 0;
             finalLogicalAddress = 0;
             num_buckets = 0;
+            clean = false;
+            cleanMaxAddress = 0;
         }
 
         public void Initialize(StreamReader reader)
@@ -391,7 +400,15 @@ namespace Tsavorite.core
 
             if (checksum != Checksum())
                 throw new TsavoriteException("Invalid checksum for checkpoint");
+
+            // The mark is taken only whole: its line, the address and a checksum over both and the checkpoint's own; anything else is no mark.
+            (clean, cleanMaxAddress) = (false, 0);
+            if (reader.ReadLine() == CleanMarkLine && long.TryParse(reader.ReadLine(), out var max) && long.TryParse(reader.ReadLine(), out var markSum)
+                    && markSum == MarkChecksum(max))
+                (clean, cleanMaxAddress) = (true, max);
         }
+
+        private readonly long MarkChecksum(long max) => Checksum() ^ max ^ 0x636C65616E4D6B31L;
 
         public void Recover(Guid guid, ICheckpointManager checkpointManager)
         {
@@ -417,6 +434,12 @@ namespace Tsavorite.core
                     writer.WriteLine(num_buckets);
                     writer.WriteLine(startLogicalAddress);
                     writer.WriteLine(finalLogicalAddress);
+                    if (clean)
+                    {
+                        writer.WriteLine(CleanMarkLine);
+                        writer.WriteLine(cleanMaxAddress);
+                        writer.WriteLine(MarkChecksum(cleanMaxAddress));
+                    }
                 }
                 return ms.ToArray();
             }
@@ -451,6 +474,8 @@ namespace Tsavorite.core
             num_buckets = 0;
             startLogicalAddress = 0;
             finalLogicalAddress = 0;
+            clean = false;
+            cleanMaxAddress = 0;
         }
     }
 

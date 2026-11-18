@@ -9,8 +9,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Tsavorite.core
 {
-    internal unsafe delegate void SkipReadCache(HashBucket* copy, HashBucket* live);
-
     public partial class TsavoriteKV<TStoreFunctions, TAllocator> : TsavoriteBase
         where TStoreFunctions : IStoreFunctions
         where TAllocator : IAllocator<TStoreFunctions>
@@ -21,12 +19,15 @@ namespace Tsavorite.core
         internal unsafe void TakeIndexFuzzyCheckpoint()
         {
             var ht_version = resizeInfo.version;
+            var clean = WritesCleanIndexCheckpoints;
+            BeginCleanCheckpoint(clean);
+            var fix = CheckpointFix(clean);
 
-            BeginMainIndexCheckpoint(ht_version, _indexCheckpoint.main_ht_device, out ulong ht_num_bytes_written, UseReadCache, SkipReadCacheBucket, ThrottleCheckpointFlushDelayMs);
+            BeginMainIndexCheckpoint(ht_version, _indexCheckpoint.main_ht_device, out ulong ht_num_bytes_written, fix, ThrottleCheckpointFlushDelayMs);
 
             var sectorSize = _indexCheckpoint.main_ht_device.SectorSize;
             var alignedIndexSize = (ht_num_bytes_written + (sectorSize - 1)) & ~((ulong)sectorSize - 1);
-            overflowBucketsAllocator.BeginCheckpoint(_indexCheckpoint.main_ht_device, alignedIndexSize, out ulong ofb_num_bytes_written, UseReadCache, SkipReadCacheBucket, epoch);
+            overflowBucketsAllocator.BeginCheckpoint(_indexCheckpoint.main_ht_device, alignedIndexSize, out ulong ofb_num_bytes_written, fix, epoch);
             _indexCheckpoint.info.num_ht_bytes = ht_num_bytes_written;
             _indexCheckpoint.info.num_ofb_bytes = ofb_num_bytes_written;
         }
@@ -74,12 +75,15 @@ namespace Tsavorite.core
         private TaskCompletionSource<bool> mainIndexCheckpointTcs;
         private SemaphoreSlim throttleIndexCheckpointFlushSemaphore;
 
-        internal unsafe void BeginMainIndexCheckpoint(int version, IDevice device, out ulong numBytesWritten, bool useReadCache = false, SkipReadCache skipReadCache = default, int throttleCheckpointFlushDelayMs = -1)
+        internal unsafe void BeginMainIndexCheckpoint(int version, IDevice device, out ulong numBytesWritten, FixCheckpointBuckets fix = null, int throttleCheckpointFlushDelayMs = -1)
         {
             long totalSize = state[version].size * sizeof(HashBucket);
             numBytesWritten = (ulong)totalSize;
             mainIndexCheckpointErrorCode = 0;
             mainIndexCheckpointTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var useCopy = fix is not null;
+            // A copying checkpoint waits for its own writes (a bounded number of copies in flight), so it issues off the caller's thread.
+            var copies = useCopy ? new SemaphoreSlim(CheckpointCopiesInFlight) : null;
 
             // Producer sentinel: count index-checkpoint IO as outstanding for the whole issuance so a concurrent
             // grow parks (does not munmap) a superseded native table this checkpoint may still be writing. Released
@@ -87,7 +91,7 @@ namespace Tsavorite.core
             // fires. No-op for the managed hash index.
             BeginNativeIndexCheckpointIo();
 
-            if (throttleCheckpointFlushDelayMs >= 0)
+            if (throttleCheckpointFlushDelayMs >= 0 || useCopy)
                 Task.Run(FlushRunner);
             else
                 FlushRunner();
@@ -97,7 +101,7 @@ namespace Tsavorite.core
                 try
                 {
                     int numChunks = 1;
-                    if (useReadCache && (totalSize > (1L << 25)))
+                    if (useCopy && (totalSize > (1L << 25)))
                     {
                         numChunks = (int)Math.Ceiling((double)totalSize / (1L << 25));
                         numChunks = (int)Math.Pow(2, Math.Ceiling(Math.Log(numChunks, 2)));
@@ -122,7 +126,7 @@ namespace Tsavorite.core
                         HashIndexPageAsyncFlushResult result = default;
                         result.chunkIndex = index;
                         result.ioUnitReleaseGuard = new(0);
-                        if (!useReadCache)
+                        if (!useCopy)
                         {
                             BeginNativeIndexCheckpointIo();
                             try
@@ -143,6 +147,8 @@ namespace Tsavorite.core
                         }
                         else
                         {
+                            copies.Wait();
+                            result.copies = copies;
                             result.mem = new SectorAlignedMemory((int)chunkSize, (int)device.SectorSize);
                             bool prot = false;
                             if (!epoch.ThisInstanceProtected())
@@ -153,10 +159,13 @@ namespace Tsavorite.core
                             try
                             {
                                 Buffer.MemoryCopy((void*)chunkStartBucket, result.mem.aligned_pointer, chunkSize, chunkSize);
-                                for (int j = 0; j < chunkSize; j += sizeof(HashBucket))
-                                {
-                                    skipReadCache((HashBucket*)(result.mem.aligned_pointer + j), (HashBucket*)((byte*)chunkStartBucket + j));
-                                }
+                                fix((HashBucket*)result.mem.aligned_pointer, (HashBucket*)chunkStartBucket, chunkSize / sizeof(HashBucket));
+                            }
+                            catch
+                            {
+                                result.mem.Dispose();
+                                _ = copies.Release();
+                                throw;
                             }
                             finally
                             {
@@ -224,6 +233,7 @@ namespace Tsavorite.core
                 // Set the page status to flushed
                 var mem = ((HashIndexPageAsyncFlushResult)context).mem;
                 mem?.Dispose();
+                _ = ((HashIndexPageAsyncFlushResult)context).copies?.Release();
 
                 if (errorCode != 0)
                 {

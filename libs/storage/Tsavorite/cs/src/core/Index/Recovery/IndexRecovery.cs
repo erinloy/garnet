@@ -60,8 +60,9 @@ namespace Tsavorite.core
             // close index checkpoint files appropriately
             info.main_ht_device.Dispose();
 
-            // Delete all tentative entries!
-            DeleteTentativeEntries();
+            // Delete all tentative entries! A clean checkpoint wrote none, nor a bucket lock bit, so its table is taken as read.
+            if (!info.info.clean)
+                DeleteTentativeEntries();
         }
 
         // Test-only

@@ -10,6 +10,9 @@ namespace Tsavorite.core
         public int chunkIndex;
         public SectorAlignedMemory mem;
 
+        /// <summary>The bound on a copying checkpoint's copies in flight; its write's completion releases one.</summary>
+        public System.Threading.SemaphoreSlim copies;
+
         /// <summary>Shared one-shot guard for releasing this chunk's native index-checkpoint IO unit. This result is
         /// boxed when passed as the device callback's context, so the issuer's copy and the callback's copy are
         /// distinct structs; the guard is a reference type so both copies claim against the same cell. Guards the
@@ -31,6 +34,7 @@ namespace Tsavorite.core
     internal struct OverflowPagesFlushAsyncResult
     {
         public SectorAlignedMemory mem;
+        public System.Threading.SemaphoreSlim copies;
     }
 
     internal struct OverflowPagesReadAsyncResult
