@@ -576,6 +576,10 @@ namespace Tsavorite.core
             return;
         }
 
+        /// <summary>The end of the state machine (a checkpoint, a resize) running now, however it ends; complete at once when none runs.
+        /// A take or a resize the driver did not begin waits on it and asks again; it never cancels the run.</summary>
+        public Task StateMachineEndAsync() => stateMachineDriver.EndOfRunningAsync();
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal Status ContextRead<TKey, TInput, TOutput, TContext, TSessionFunctionsWrapper>(TKey key, ref TInput input, ref TOutput output, TContext context, TSessionFunctionsWrapper sessionFunctions)
             where TKey : IKey
