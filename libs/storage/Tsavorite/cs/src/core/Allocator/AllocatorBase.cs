@@ -1996,6 +1996,29 @@ namespace Tsavorite.core
             }
         }
 
+        /// <summary>Frames past a recovered tail's page that held bytes when recovery ended, and were cleared.</summary>
+        internal long framesClearedPastTail;
+
+        /// <summary>
+        /// Clears every allocated frame that holds no page of [<paramref name="headPage"/>, <paramref name="tailPage"/>]. A replay that walked more
+        /// pages than the ring holds leaves each such frame with a page it read below the head, and a page turn takes an allocated frame as it finds
+        /// it, so the bytes past a page's last record were an older page's records, which a scan reads as records (SPARK 11-18: log page 179,657
+        /// held page 179,593 from offset 1,041,136, and an index entry named an address in it).
+        /// </summary>
+        private int ClearFramesPastTail(long headPage, long tailPage)
+        {
+            var cleared = 0;
+            for (var page = tailPage + 1; page < headPage + BufferSize; page++)
+            {
+                var index = (int)(page % BufferSize);
+                if (!IsAllocated(index)) continue;
+                ClearPage(page, offset: 0);
+                if (pageHeaderSize > 0) PageHeader.Initialize(pagePointers[index]);
+                cleared++;
+            }
+            return cleared;
+        }
+
         /// <summary>Address for notification of flushed-until</summary>
         public long notifyFlushedUntilAddress;
 
@@ -2031,6 +2054,7 @@ namespace Tsavorite.core
 
             // clear the last page starting from tail address
             ClearPage(pageIndex, (int)GetOffsetOnPage(tailAddress));
+            framesClearedPastTail += ClearFramesPastTail(GetPage(headAddress), tailPage);
 
             // Printing debug info
             logger?.LogInformation("******* Recovered HybridLog Stats *******");
