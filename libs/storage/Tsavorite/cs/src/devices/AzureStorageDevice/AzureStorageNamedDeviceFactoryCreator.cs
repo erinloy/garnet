@@ -51,9 +51,13 @@ namespace Tsavorite.devices
         /// </summary>
         public Func<string> WriteFence { get; set; }
 
+        /// <summary>ZILTCH (echo #94774 (2)): the writer's segment lease id for every device this creator's factories make
+        /// (<see cref="AzureStorageDevice.SegmentLeaseId"/>). Null: unleased.</summary>
+        public Func<string> SegmentLeaseId { get; set; }
+
         public INamedDeviceFactory Create(string baseName)
         {
-            return new AzureStorageNamedDeviceFactory(baseName, pageBlobAccount, logger) { WriteFence = WriteFence };
+            return new AzureStorageNamedDeviceFactory(baseName, pageBlobAccount, logger) { WriteFence = WriteFence, SegmentLeaseId = SegmentLeaseId };
         }
     }
 }

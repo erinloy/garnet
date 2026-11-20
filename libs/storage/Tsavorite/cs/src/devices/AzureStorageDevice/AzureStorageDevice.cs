@@ -19,7 +19,7 @@ namespace Tsavorite.devices
     /// A IDevice Implementation that is backed by<see href="https://docs.microsoft.com/en-us/azure/storage/blobs/storage-blob-pageblob-overview">Azure Page Blob</see>.
     /// This device is slower than a local SSD or HDD, but provides scalability and shared access in the cloud.
     /// </summary>
-    public class AzureStorageDevice : StorageDeviceBase
+    public partial class AzureStorageDevice : StorageDeviceBase
     {
         readonly ConcurrentDictionary<int, BlobEntry> blobs;
         int[] recoveredSegments = [];
@@ -457,7 +457,7 @@ namespace Tsavorite.devices
                     async (numAttempts) =>
                     {
                         var client = (numAttempts > 1) ? entry.PageBlob.Default : entry.PageBlob.Aggressive;
-                        await client.DeleteAsync(cancellationToken: StorageErrorHandler.Token).ConfigureAwait(false);
+                        await DeleteSegmentBlobAsync(client, entry, StorageErrorHandler.Token).ConfigureAwait(false);
                         return 1;
                     });
             }
@@ -492,7 +492,7 @@ namespace Tsavorite.devices
                     async (numAttempts) =>
                     {
                         var client = (numAttempts > 1) ? entry.PageBlob.Default : entry.PageBlob.Aggressive;
-                        await client.DeleteAsync(cancellationToken: StorageErrorHandler.Token).ConfigureAwait(false);
+                        await DeleteSegmentBlobAsync(client, entry, StorageErrorHandler.Token).ConfigureAwait(false);
                         return 1;
                     });
             }
@@ -636,7 +636,7 @@ namespace Tsavorite.devices
 
                     // If no blob exists for the segment, we must first create the segment asynchronouly. (Create call takes ~70 ms by measurement)
                     // After creation is done, we can call write.
-                    var createTask = entry.CreateAsync(size, pageBlob, replaceOnCreate.TryRemove(segmentId, out _));
+                    var createTask = CreateSegmentAsync(entry, size, pageBlob, replaceOnCreate.TryRemove(segmentId, out _));
                     // On creation failure, remove the entry so the next write retries creation.
                     createTask.ContinueWith(t =>
                     {
@@ -690,13 +690,27 @@ namespace Tsavorite.devices
                         {
                             var client = numAttempts > 2 || length > MAX_AGGRESSIVE_TRANSFER ? blobEntry.PageBlob.Default : blobEntry.PageBlob.Aggressive;
 
-                            var response = await client.UploadPagesAsync(
-                                 content: stream,
-                                 offset: destinationAddress + offset,
-                                 transactionalContentHash: null,
-                                 conditions: underLease ? new PageBlobRequestConditions() { IfMatch = blobEntry.ETag } : null,
-                                 progressHandler: null,
-                                 cancellationToken: token).ConfigureAwait(false);
+                            // ZILTCH (echo #94774 (2)): the blob, not this process, refuses a PUT once the next writer took the segment.
+                            var segmentLease = SegmentLeaseId?.Invoke();
+                            if (segmentLease != null)
+                                await HoldSegmentLeaseAsync(blobEntry, segmentLease, destinationAddress + offset, token).ConfigureAwait(false);
+
+                            Azure.Response<PageInfo> response;
+                            try
+                            {
+                                response = await client.UploadPagesAsync(
+                                     content: stream,
+                                     offset: destinationAddress + offset,
+                                     transactionalContentHash: null,
+                                     conditions: segmentLease != null ? new PageBlobRequestConditions() { LeaseId = segmentLease }
+                                        : underLease ? new PageBlobRequestConditions() { IfMatch = blobEntry.ETag } : null,
+                                     progressHandler: null,
+                                     cancellationToken: token).ConfigureAwait(false);
+                            }
+                            catch (Azure.RequestFailedException e) when (segmentLease != null && IsLeaseRefusal(e))
+                            {
+                                throw SegmentLeaseRefused(blobEntry, blobEntry.PageBlob.Default.Name, destinationAddress + offset, e);
+                            }
 
                             blobEntry.ETag = response.Value.ETag;
                         }

@@ -19,6 +19,12 @@ namespace Tsavorite.devices
         public BlobUtilsV12.PageBlobClients PageBlob { get; private set; }
         public Azure.ETag ETag { get; set; }
 
+        /// <summary>ZILTCH (echo #94774 (2)): the segment lease id this device holds on the blob, or null; set once acquired.</summary>
+        internal volatile string HeldLease;
+
+        /// <summary>One acquisition at a time per blob.</summary>
+        internal readonly SemaphoreSlim LeaseGate = new(1, 1);
+
         ConcurrentQueue<Action> pendingWrites;
         readonly AzureStorageDevice azureStorageDevice;
         int waitingCount;

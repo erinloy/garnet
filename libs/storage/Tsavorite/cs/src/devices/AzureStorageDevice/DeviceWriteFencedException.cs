@@ -15,8 +15,8 @@ namespace Tsavorite.devices
     public sealed class DeviceWriteFencedException : IOException
     {
         /// <summary>Creates the refusal of one page write.</summary>
-        public DeviceWriteFencedException(string blobName, long destinationAddress, string why)
-            : base($"page write to '{blobName}' at {destinationAddress} REFUSED by the writer fence: {why}. No byte of it was sent.")
+        public DeviceWriteFencedException(string blobName, long destinationAddress, string why, bool sent = false)
+            : base($"page write to '{blobName}' at {destinationAddress} REFUSED by the writer fence: {why}. " + (sent ? "The blob landed none of it." : "No byte of it was sent."))
         {
             BlobName = blobName;
             DestinationAddress = destinationAddress;

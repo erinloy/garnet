@@ -22,6 +22,9 @@ namespace Tsavorite.devices
         /// <summary>ZILTCH (echo #90130 (1)): the writer fence each device this factory makes asks before every page PUT.</summary>
         internal Func<string> WriteFence { get; init; }
 
+        /// <summary>ZILTCH (echo #94774 (2)): handed to each device it makes (<see cref="AzureStorageDevice.SegmentLeaseId"/>).</summary>
+        internal Func<string> SegmentLeaseId { get; init; }
+
         /// <inheritdoc />
         internal AzureStorageNamedDeviceFactory(string baseName, BlobUtilsV12.ServiceClients pageBlobAccount, ILogger logger)
         {
@@ -63,7 +66,7 @@ namespace Tsavorite.devices
         /// <inheritdoc />
         public IDevice Get(FileDescriptor fileInfo)
         {
-            return new AzureStorageDevice(fileInfo.fileName, pageBlobDirectory.GetSubDirectory(fileInfo.directoryName), null, false, false, logger) { WriteFence = WriteFence };
+            return new AzureStorageDevice(fileInfo.fileName, pageBlobDirectory.GetSubDirectory(fileInfo.directoryName), null, false, false, logger) { WriteFence = WriteFence, SegmentLeaseId = SegmentLeaseId };
         }
 
         /// <inheritdoc />
