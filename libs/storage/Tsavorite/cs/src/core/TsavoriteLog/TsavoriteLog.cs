@@ -660,6 +660,9 @@ namespace Tsavorite.core
             epoch.ReleaseUserWord(inflightWord);
             commitQueue.Dispose();
             _ = commitTcs.TrySetException(new ObjectDisposedException("TsavoriteLog has been disposed"));
+            // observed here: with no commit waiter parked, nothing else reads it and the finalizer reports it as unobserved
+            // (ziltch prod, one at every writer take that disposed a replica's read-only log). A parked waiter still gets it.
+            _ = commitTcs.Task.Exception;
             allocator.Dispose();
             if (isEpochOwned)
                 epoch.Dispose();
