@@ -94,7 +94,7 @@ namespace Tsavorite.core
                 // If allocation had to flush and did it inline, then the epoch was refreshed and we need to check for address safety.
                 if (VerifyInMemoryAddresses(ref stackCtx))
                 {
-                    if (newLogicalAddress > stackCtx.recSrc.LatestLogicalAddress)
+                    if (newLogicalAddress > stackCtx.recSrc.LatestLogicalAddress && mainLogAllocateBelowLatestForTest?.Invoke() != true)
                         return true;
 
                     // This allocation is below the necessary address so put it on the free list or abandon it, then repeat the loop.
@@ -109,7 +109,13 @@ namespace Tsavorite.core
                         if (RevivificationManager.TryAdd(newLogicalAddress, ref logRecord, ref sessionFunctions.Ctx.RevivificationStats))
                             continue;
                     }
-                    LogRecord.GetInfo(newPhysicalAddress).SetInvalid();  // Skip on log scan
+                    // GetInfo returned a copy, so the abandoned allocation kept no header: a scan met whatever bytes the page held there.
+                    // It is framed at its allocated size and marked invalid, as a retry-saved allocation is, so a scan steps over it.
+                    new LogRecord(newPhysicalAddress).InitializeForReuse(in sizeInfo);
+                    ref var abandoned = ref LogRecord.GetInfoRef(newPhysicalAddress);
+                    abandoned.PreviousAddress = kTempInvalidAddress;
+                    abandoned.SetInvalid();
+                    _ = Interlocked.Increment(ref mainLogAllocationsAbandoned);
                     _ = Thread.Yield();
                     continue;
                 }

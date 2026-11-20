@@ -78,6 +78,14 @@ namespace Tsavorite.core
         /// <summary>Test seam: true makes a read-cache allocation land below the chain's read-cache head, as the wedged copies' did.</summary>
         internal System.Func<bool> readCacheAllocateBelowHeadForTest;
 
+        /// <summary>Test seam: true makes a main-log allocation land at or below its chain's latest address, so it is abandoned.</summary>
+        internal System.Func<bool> mainLogAllocateBelowLatestForTest;
+
+        long mainLogAllocationsAbandoned;
+
+        /// <summary>Main-log allocations abandoned because they landed at or below their chain's latest address; each is left an invalid, framed record.</summary>
+        public long MainLogAllocationsAbandoned => Interlocked.Read(ref mainLogAllocationsAbandoned);
+
         /// <summary>Read-cache copies given up because every allocation in <see cref="ReadCacheAllocateTries"/> landed below the chain's read-cache head.</summary>
         public long ReadCacheAllocateSpunOut => Interlocked.Read(ref readCacheAllocateSpunOut);
 
