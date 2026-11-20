@@ -55,7 +55,7 @@ namespace Tsavorite.core
             pinnedSpanByte = default;
             var pool = returnPool;
             returnPool = null;
-            pool?.Push(this);
+            if (pool is { Count: < PooledHeapContainers.Max }) pool.Push(this);   // capped as the session's pending ops are
         }
     }
 }

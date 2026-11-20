@@ -100,13 +100,18 @@ namespace Tsavorite.core
             {
                 // Drop the session-typed context (its input container / disk record were already disposed or
                 // moved by the drain) so a pooled op retains no stale references, then reset the base fields.
-                // Uncapped, matching the sibling per-session heapContainerPool with the same rent-on-IO-issue /
-                // return-on-drain lifecycle; the pool self-bounds at this session's peak concurrent pending depth.
+                // Capped (rg 11-19: a router life held 143K of these, ~63 MB, because an uncapped pool keeps a session's PEAK pending
+                // depth for the session's life, and pooled sessions live as long as the store). Past the cap the op is left to the GC.
                 ctx.baseOperationState = default;
                 ctx.pendingState = default;
                 ctx.Reset();
-                pendingIoContextPool.Push(ctx);
+                if (pendingIoContextPool.Count < PooledPendingOpsMax)
+                    pendingIoContextPool.Push(ctx);
             }
+
+            /// <summary>The most pending ops, and input wrappers, a session keeps pooled: its steady pending depth reuses them with no
+            /// allocation, and a burst past it allocates once and is collected rather than held for the session's life.</summary>
+            public const int PooledPendingOpsMax = PooledHeapContainers.Max;
 
             public int SyncIoPendingCount => pendingCount;
 

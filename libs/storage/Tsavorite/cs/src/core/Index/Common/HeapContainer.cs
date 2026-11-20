@@ -19,6 +19,12 @@ namespace Tsavorite.core
         ref T Get();
     }
 
+    /// <summary>The most input wrappers a session's pool keeps: a burst of pending ops past it is collected, not held for the session's life.</summary>
+    internal static class PooledHeapContainers
+    {
+        internal const int Max = 1024;
+    }
+
     /// <summary>
     /// Heap container for standard C# objects (non-variable-length).
     /// </summary>
@@ -59,7 +65,7 @@ namespace Tsavorite.core
             obj = default;
             var pool = returnPool;
             returnPool = null;
-            pool?.Push(this);
+            if (pool is { Count: < PooledHeapContainers.Max }) pool.Push(this);   // capped as the session's pending ops are
         }
     }
 }
