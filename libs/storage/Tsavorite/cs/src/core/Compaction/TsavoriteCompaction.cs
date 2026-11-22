@@ -39,7 +39,8 @@ namespace Tsavorite.core
             using var storeSession = NewSession<ITsavoriteScanIterator, TInput, TOutput, TContext, NoOpSessionFunctions<TInput, TOutput, TContext>>(new());
             var storebContext = storeSession.BasicContext;
 
-            using (var iter1 = Log.Scan(Log.BeginAddress, untilAddress))
+            // rg 11-22: a window on a remote tier is read many pages at once (prod's budget pass read two at a time: 342 MB in 49 min).
+            using (var iter1 = Log.Scan(Log.BeginAddress, untilAddress, DiskScanBufferingMode.MultiPageBuffering))
             {
                 long numPending = 0;
                 while (iter1.GetNext())
@@ -91,7 +92,7 @@ namespace Tsavorite.core
             using (var tempKvSession = tempKv.NewSession<ITsavoriteScanIterator, TInput, TOutput, TContext, NoOpSessionFunctions<TInput, TOutput, TContext>>(new()))
             {
                 var tempbContext = tempKvSession.BasicContext;
-                using (var iter1 = Log.Scan(hlogBase.BeginAddress, untilAddress))
+                using (var iter1 = Log.Scan(hlogBase.BeginAddress, untilAddress, DiskScanBufferingMode.MultiPageBuffering))
                 {
                     while (iter1.GetNext())
                     {
