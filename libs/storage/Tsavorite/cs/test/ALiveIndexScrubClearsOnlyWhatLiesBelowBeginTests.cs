@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -73,6 +74,42 @@ namespace Tsavorite.test
         {
             var value = new ValueStruct { vfield1 = i, vfield2 = i * 10 + generation };
             _ = context.Upsert(Key(i), SpanByte.FromPinnedVariable(ref value), Empty.Default);
+        }
+
+        [Test]
+        [Category("TsavoriteKV")]
+        [Category("Index")]
+        public void Ranges_asked_in_one_walk_count_what_each_asked_alone_counts_and_name_their_lowest_entry()
+        {
+            using var session = store.NewSession<KeyStruct, InputStruct, OutputStruct, Empty, Quiet>(new Quiet());
+            var context = session.BasicContext;
+            var marks = new long[5];
+            for (var part = 0; part < 4; part++)
+            {
+                marks[part] = store.Log.TailAddress;
+                for (var i = part * Keys / 4; i < (part + 1) * Keys / 4; i++) Write(context, i, 0);
+            }
+            marks[4] = store.Log.TailAddress;
+
+            // Three ranges with a gap between the second and the third, and one that holds nothing: past the tail.
+            long[] froms = [marks[0], marks[1], marks[3], marks[4]], tos = [marks[1], marks[2], marks[4], marks[4] + 64];
+            long[] counts = new long[4], lowest = new long[4];
+            store.IndexEntriesAddressedIn(froms, tos, counts, lowest);
+
+            for (var i = 0; i < 4; i++)
+                ClassicAssert.AreEqual(store.IndexEntriesAddressedIn(froms[i], tos[i]), counts[i], $"range {i} counts what it counts asked alone");
+            ClassicAssert.Greater(counts[0], 0, "CONTROL: a range of written keys is named by the index");
+            ClassicAssert.Greater(store.IndexEntriesAddressedIn(marks[2], marks[3]), 0, "CONTROL: the gap holds entries, and no range counted them");
+            ClassicAssert.AreEqual((0L, -1L), (counts[3], lowest[3]), "a range nothing names counts none and names no address");
+            for (var i = 0; i < 3; i++)
+            {
+                ClassicAssert.GreaterOrEqual(lowest[i], froms[i], $"range {i}'s lowest entry lies in it");
+                ClassicAssert.AreEqual(0, store.IndexEntriesAddressedIn(froms[i], lowest[i]), $"nothing in range {i} is named below its lowest entry");
+                ClassicAssert.AreEqual(1, store.IndexEntriesAddressedIn(lowest[i], lowest[i] + 1), $"range {i}'s lowest entry is an entry");
+            }
+
+            _ = Assert.Throws<ArgumentException>(() => store.IndexEntriesAddressedIn([marks[1], marks[0]], [marks[2], marks[1]], new long[2], new long[2]), "descending ranges are refused");
+            _ = Assert.Throws<ArgumentException>(() => store.IndexEntriesAddressedIn([marks[0], marks[1] - 8], [marks[1], marks[2]], new long[2], new long[2]), "overlapping ranges are refused");
         }
 
         [Test]
