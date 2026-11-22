@@ -68,7 +68,7 @@ namespace Tsavorite.core
 
             // CAS failed
             stackCtx.SetNewRecordInvalid(ref newLogRecord.InfoRef);
-            OnDispose(ref newLogRecord, DisposeReason.InitialWriterCASFailed);
+            OnDispose(ref newLogRecord, DisposeReason.CopyCASFailed);
 
             SaveAllocationForRetry(ref operationState, newLogicalAddress, newPhysicalAddress);
             return RetryAfterLostCas(ref operationState, ref stackCtx);   // RETRY_NOW, then a bounded refresh: a copy never pins the epoch

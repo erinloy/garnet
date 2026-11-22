@@ -71,6 +71,11 @@ namespace Tsavorite.core
         /// <summary>
         /// Elided from hash chain but not put into Revivification free list
         /// </summary>
-        Elided
+        Elided,
+
+        /// <summary>
+        /// Failure of a copy's insertion (to the tail or the read cache). No writer callback ran for the record.
+        /// </summary>
+        CopyCASFailed
     }
 }

@@ -55,7 +55,7 @@ namespace Tsavorite.core
                     NoteZeroCasRefused(ZeroCasSite.ReadCacheCopy);
                 // Another insert won the head; abandon this copy (read-cache population is best-effort).
                 stackCtx.SetNewRecordInvalid(ref newLogRecord.InfoRef);
-                OnDispose(ref newLogRecord, DisposeReason.InitialWriterCASFailed);
+                OnDispose(ref newLogRecord, DisposeReason.CopyCASFailed);
                 newLogRecord.InfoRef.PreviousAddress = kTempInvalidAddress;     // Necessary for ReadCacheEvict, but cannot be kInvalidAddress or we have recordInfo.IsNull
                 return false;
             }
