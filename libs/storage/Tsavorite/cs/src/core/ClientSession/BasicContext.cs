@@ -532,6 +532,15 @@ namespace Tsavorite.core
         public Status ConditionalInsert(TKey key, ReadOnlySpan<byte> value, long sinceAddress, bool givesUpWhenTailBusy)
             => ConditionalInsertBytes(key, value, tombstone: false, sinceAddress, givesUpWhenTailBusy);
 
+        /// <summary>
+        /// The same insert as <see cref="ConditionalInsert(TKey, ReadOnlySpan{byte}, long)"/>, for a caller whose answer came from a store this log's
+        /// records move to: <paramref name="uncutSince"/> is the TailAddress it read before it looked there. If the log's BeginAddress has passed it,
+        /// a record written since may have moved out unseen, so the insert ends Canceled, nothing written, and the caller asks again.
+        /// Counted in <see cref="TsavoriteKV{TStoreFunctions, TAllocator}.ConditionalInsertsBoundCut"/>.
+        /// </summary>
+        public Status ConditionalInsertUncut(TKey key, ReadOnlySpan<byte> value, long sinceAddress, long uncutSince)
+            => ConditionalInsertBytes(key, value, tombstone: false, sinceAddress, uncutSince: uncutSince);
+
         /// <summary>The same test as <see cref="ConditionalInsert(TKey, ReadOnlySpan{byte}, long)"/>, appending a tombstone for the key.</summary>
         public Status ConditionalInsertTombstone(TKey key, long sinceAddress)
             => ConditionalInsertBytes(key, default, tombstone: true, sinceAddress);
@@ -571,7 +580,7 @@ namespace Tsavorite.core
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private Status ConditionalInsertBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress, bool givesUpWhenTailBusy = false)
+        private Status ConditionalInsertBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress, bool givesUpWhenTailBusy = false, long uncutSince = 0)
         {
             // The same refusal as the read-cache insert above: under this store's epoch the Resume would nest (mesh 11-12 wedge).
             if (store.epoch.ThisInstanceProtected())
@@ -580,7 +589,7 @@ namespace Tsavorite.core
             try
             {
                 return store.ConditionalInsertBytes<TKey, TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions,
-                        BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(sessionFunctions, key, value, tombstone, sinceAddress, givesUpWhenTailBusy);
+                        BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(sessionFunctions, key, value, tombstone, sinceAddress, givesUpWhenTailBusy, uncutSince);
             }
             finally
             {

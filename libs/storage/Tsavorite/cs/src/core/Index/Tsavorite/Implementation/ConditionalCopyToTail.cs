@@ -102,6 +102,10 @@ namespace Tsavorite.core
                 }
                 while (HandleImmediateNonPendingRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(status, sessionFunctions));
 
+                // The search above read the entry again; the bound is judged against the begin address read after it.
+                if (BoundWasCut(ref operationState))
+                    return OperationStatus.CANCELED;
+
                 // Issue IO if necessary and desired (for ReadFromImmutable, it isn't; just exit in that case), else loop back up and retry the insert.
                 if (!wantIO)
                 {
@@ -125,12 +129,13 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal Status CompactionConditionalCopyToTail<TInput, TOutput, TContext, TSessionFunctionsWrapper, TSourceLogRecord>(
                 TSessionFunctionsWrapper sessionFunctions, in TSourceLogRecord srcLogRecord, long currentAddress, long minAddress, long maxAddress = long.MaxValue, bool createTag = false,
-                bool givesUpWhenTailBusy = false)
+                bool givesUpWhenTailBusy = false, long uncutSince = 0)
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
             where TSourceLogRecord : ISourceLogRecord
         {
             Debug.Assert(epoch.ThisInstanceProtected(), "This is called only from Compaction or ConditionalInsert so the epoch should be protected");
             OperationState<TInput, TOutput, TContext> operationState = default;
+            operationState.uncutSince = uncutSince;
             if (givesUpWhenTailBusy)
                 operationState.operationFlags |= OperationState<TInput, TOutput, TContext>.kGivesUpWhenTailBusy;
             // Plumb the source logical address so PostCopyToTail can name per-flush snapshot files
@@ -169,6 +174,8 @@ namespace Tsavorite.core
                 FindOrCreateTag(ref stackCtx.hei, hlogBase.BeginAddress);
             }
 
+            if (BoundWasCut(ref operationState))
+                return new(StatusCode.Canceled);
             if (needIO)
                 status = PrepareIOForConditionalOperation(sessionFunctions, ref operationState, keyHash, in srcLogRecord, ref stackCtx, minAddress, maxAddress);
             else

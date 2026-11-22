@@ -13,11 +13,12 @@ namespace Tsavorite.core
         /// <summary>
         /// F2's copy from a cold store, from bytes: append (key, value) or the key's tombstone at the tail only if this log holds no record
         /// for the key at or above <paramref name="sinceAddress"/>. The bound is INCLUSIVE: a caller passes the TailAddress it read before it
-        /// looked elsewhere, and the next record is written exactly there.
+        /// looked elsewhere, and the next record is written exactly there. With <paramref name="uncutSince"/>, an insert that finds the log's
+        /// BeginAddress past it ends Canceled, nothing written: a record written since may have left this log, and no search here can see it.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal Status ConditionalInsertBytes<TKey, TInput, TOutput, TContext, TSessionFunctionsWrapper>(TSessionFunctionsWrapper sessionFunctions,
-                TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress, bool givesUpWhenTailBusy = false)
+                TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress, bool givesUpWhenTailBusy = false, long uncutSince = 0)
             where TKey : IKey
 #if NET9_0_OR_GREATER
                 , allows ref struct
@@ -33,7 +34,7 @@ namespace Tsavorite.core
                 var source = new TransientSourceLogRecord(DiskLogRecord.CreateFromTransientLogRecord(in image));
                 return CompactionConditionalCopyToTail<TInput, TOutput, TContext, TSessionFunctionsWrapper, TransientSourceLogRecord>(
                         sessionFunctions, in source, currentAddress: sinceAddress > 0 ? sinceAddress - 1 : 0, minAddress: sinceAddress, createTag: true,
-                        givesUpWhenTailBusy: givesUpWhenTailBusy);
+                        givesUpWhenTailBusy: givesUpWhenTailBusy, uncutSince: uncutSince);
             }
             finally
             {

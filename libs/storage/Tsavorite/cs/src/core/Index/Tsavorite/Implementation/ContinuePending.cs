@@ -413,6 +413,8 @@ namespace Tsavorite.core
                     return OperationStatus.SUCCESS;
                 if (GivesUpWhenTailBusy(internalStatus, ref operationState))
                     return OperationStatus.CANCELED;
+                if (!OperationStatusUtils.IsRetry(internalStatus) && BoundWasCut(ref operationState))
+                    return OperationStatus.CANCELED;
                 if (!OperationStatusUtils.IsRetry(internalStatus))
                 {
                     // Plumb source logical address so PostCopyToTail can name per-flush snapshot files.

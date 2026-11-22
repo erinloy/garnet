@@ -93,7 +93,21 @@ namespace Tsavorite.core
 
         long readCacheInsertsLanded, readCacheInsertsHeld, readCacheInsertsBelowMemory, readCacheInsertsLost, readCacheInsertsUnderEpoch;
 
-        long conditionalInsertsUnderEpoch, conditionalInsertsGaveUpTailBusy;
+        long conditionalInsertsUnderEpoch, conditionalInsertsGaveUpTailBusy, conditionalInsertsBoundCut;
+
+        // Called after a read of the key's hash entry and before the copy it admits. A begin address still at or under the bound means every
+        // record written since the caller's look is in this log and the search saw it; one past the bound means a record may have left unseen.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool BoundWasCut<TInput, TOutput, TContext>(ref OperationState<TInput, TOutput, TContext> operationState)
+        {
+            if (operationState.uncutSince <= 0 || hlogBase.BeginAddress <= operationState.uncutSince)
+                return false;
+            _ = System.Threading.Interlocked.Increment(ref conditionalInsertsBoundCut);
+            return true;
+        }
+
+        /// <summary>Conditional log inserts ended Canceled because the log's BeginAddress had passed the tail their caller read (nothing was written).</summary>
+        public long ConditionalInsertsBoundCut => System.Threading.Interlocked.Read(ref conditionalInsertsBoundCut);
 
         // A copy that asked to give up (kGivesUpWhenTailBusy) ends on a busy tail instead of spinning or waiting: its source still holds the record.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

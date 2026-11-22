@@ -47,6 +47,9 @@ namespace Tsavorite.core
             /// <summary>The initial highest logical address of the search; used to limit search ranges when the pending operation completes (e.g. to see if a duplicate was inserted).</summary>
             internal long initialLatestLogicalAddress;
 
+            /// <summary>A conditional insert's bound that a begin shift must not pass: the tail its caller read before looking elsewhere. 0: no such bound.</summary>
+            internal long uncutSince;
+
             // operationFlags values
             internal ushort operationFlags;
 #pragma warning disable IDE1006 // Naming Styles
