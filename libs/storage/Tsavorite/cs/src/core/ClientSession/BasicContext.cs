@@ -641,5 +641,26 @@ namespace Tsavorite.core
                 UnsafeSuspendThread();
             }
         }
+
+        /// <summary>
+        /// Where a read of <paramref name="key"/> would first leave memory, answered from memory alone (no device read is issued).
+        /// </summary>
+        /// <param name="key">Key of the record.</param>
+        /// <param name="logicalAddress">Found: the record's address in memory. NotFound: the address its chain goes on at below the
+        /// head, the first device read a point read would issue; 0 when no device read would be.</param>
+        /// <returns>Status</returns>
+        public Status ChainAddressBelowMemory(TKey key, out long logicalAddress)
+        {
+            UnsafeResumeThread();
+            try
+            {
+                return store.InternalChainAddressBelowMemory<TKey, TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions, BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(
+                        key, sessionFunctions, out logicalAddress);
+            }
+            finally
+            {
+                UnsafeSuspendThread();
+            }
+        }
     }
 }
