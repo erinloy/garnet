@@ -471,6 +471,13 @@ namespace Tsavorite.core
 
         internal override void AsyncReadPageFromDeviceToFrame<TContext>(CircularDiskReadBuffer readBuffers, long readPage, long untilAddress, TContext context, out CountdownEvent completed,
                 long devicePageOffset = 0, IDevice device = null, IDevice objectLogDevice = null, CancellationTokenSource cts = null)
-            => hlogBase.AsyncReadPageFromDeviceToFrame(readBuffers, readPage, untilAddress, AsyncReadPageFromDeviceToFrameCallback, context, frame, out completed, devicePageOffset, device, objectLogDevice, cts);
+        {
+            // A scan that ends inside this page still hands the record that starts before its end, and that record may run past it:
+            // read on to the page's end where the log's own device holds it, never only to the sector the end falls in.
+            var pageEnd = (readPage + 1) << hlogBase.LogPageSizeBits;
+            if (device is null && untilAddress < pageEnd)
+                untilAddress = Math.Max(untilAddress, Math.Min(pageEnd, hlogBase.FlushedUntilAddress));
+            hlogBase.AsyncReadPageFromDeviceToFrame(readBuffers, readPage, untilAddress, AsyncReadPageFromDeviceToFrameCallback, context, frame, out completed, devicePageOffset, device, objectLogDevice, cts);
+        }
     }
 }
