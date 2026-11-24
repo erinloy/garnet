@@ -300,7 +300,17 @@ namespace Tsavorite.core
             _ = Interlocked.Or(ref readCacheStarts[word], 1L << (int)(slot & 63));
         }
 
+        // An eviction excludes an at-barrier reshape copy (pack, trim, halve, a grow's table switch) and a grow's chunk split: an eviction that
+        // unlinks a slot the copy already took leaves the new table a dangling link. Weighed: CAS-stripping links first needs a wait no drain action may make.
+        internal readonly object readCacheEvictOrReshape = new();
+
         internal void ReadCacheEvict(long rcLogicalAddress, long rcToLogicalAddress)
+        {
+            lock (readCacheEvictOrReshape)
+                ReadCacheEvictRange(rcLogicalAddress, rcToLogicalAddress);
+        }
+
+        void ReadCacheEvictRange(long rcLogicalAddress, long rcToLogicalAddress)
         {
             // Every record allocated in [rcLogicalAddress, rcToLogicalAddress) is named by its start bit; each is unlinked from its key's
             // chain. The range is below SafeHeadAddress, so every allocation in it, and the bit it set, happened before this epoch drained.
@@ -355,6 +365,10 @@ namespace Tsavorite.core
                 return;
 
             HashEntryInfo hei = new(storeFunctions.GetKeyHashCode64(logRecord));
+            // As an operation does: in a grow the key's chunk is split before the new table is asked, else the unlink lands in the old one. Read from the
+            // split count, not the phase: the table switches under this eviction's exclusion, before the driver publishes IN_PROGRESS_GROW.
+            if (Interlocked.Read(ref numPendingChunksToBeSplit) > 0)
+                SplitBuckets(hei.hash);
             if (FindTag(ref hei))
                 ReadCacheEvictChain(rcToLogicalAddress, ref hei);
         }

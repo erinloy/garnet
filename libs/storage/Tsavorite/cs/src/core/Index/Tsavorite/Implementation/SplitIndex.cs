@@ -69,6 +69,15 @@ namespace Tsavorite.core
 
         private bool SplitSingleBucket(int i, int numChunks)
         {
+            // A chunk splits under the read-cache eviction's exclusion, so no eviction sees it half split and none waits on a claim it blocks.
+            if (Interlocked.Read(ref splitStatus[i & (numChunks - 1)]) != 0)
+                return false;
+            lock (readCacheEvictOrReshape)
+                return SplitSingleBucketExclusive(i, numChunks);
+        }
+
+        private bool SplitSingleBucketExclusive(int i, int numChunks)
+        {
             // Try to gain exclusive access to this chunk's split state (1 means locked, 0 means unlocked, 2 means the chunk was already split);
             // another thread could also be running SplitChunks. TODO change these numbers to named consts.
             if (0 == Interlocked.CompareExchange(ref splitStatus[i & (numChunks - 1)], 1, 0))
@@ -126,13 +135,15 @@ namespace Tsavorite.core
                         if (Constants.kInvalidEntry == entry.word)
                             continue;
 
+                        // A read-cache prefix is not carried: copied into both halves, or one half's records left in the other's chain, a later
+                        // eviction unlinks it from one bucket only. Its records stay resident: their eviction would have split this chunk first.
+                        while (entry.IsReadCache)
+                            entry.Address = LogRecord.GetInfo(readcacheBase.GetPhysicalAddress(entry.Address)).PreviousAddress;
+                        if (entry.Address == kInvalidAddress || entry.Address == kTempInvalidAddress)
+                            continue;
+
                         LogRecord logRecord = default;
-                        if (entry.IsReadCache)
-                        {
-                            if (entry.Address >= readcacheBase.HeadAddress)
-                                logRecord = readcache.CreateLogRecord(entry.Address);
-                        }
-                        else if (entry.Address >= hlogBase.HeadAddress)
+                        if (entry.Address >= hlogBase.HeadAddress)
                             logRecord = hlog.CreateLogRecord(entry.Address);
 
                         if (logRecord.IsSet)
