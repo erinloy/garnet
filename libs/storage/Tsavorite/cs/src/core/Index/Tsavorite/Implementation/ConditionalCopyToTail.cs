@@ -19,6 +19,18 @@ namespace Tsavorite.core
         /// <summary>Records a lookup compaction met whose key has no hash-index entry: unreachable by any read, so dropped and never linked.</summary>
         public long CompactionSourcesWithoutTag => Interlocked.Read(ref compactionSourcesWithoutTag);
 
+        long copiesFromEvictedSourcesDropped;
+
+        /// <summary>In-memory copies (ReadFromImmutable) dropped on a retry because their source page left memory under the epoch refresh
+        /// (keystone 11-24: the re-search read the closed source, and its key threw NullReferenceException on a chunk store under swaps).</summary>
+        public long CopiesFromEvictedSourcesDropped => Interlocked.Read(ref copiesFromEvictedSourcesDropped);
+
+        /// <summary>Gate seams: the next conditional copy loses its insert once, then runs <see cref="conditionalCopyRetryForTest"/> before
+        /// re-searching; <see cref="conditionalCopyEvictedCheckOffForTest"/> is the mutant that re-searches an evicted source.</summary>
+        internal bool conditionalCopyLosesOnceForTest, conditionalCopyEvictedCheckOffForTest;
+        internal Action conditionalCopyRetryForTest;
+        internal int conditionalCopySearchedEvictedForTest;   // test-only, not interlocked: the mutant's searches of an evicted source (single-threaded gate)
+
         long compactionCarriedPastLostLinks;
 
         /// <summary>Records a lookup compaction carried to the tail because its liveness walk met a lost link
@@ -70,7 +82,10 @@ namespace Tsavorite.core
                 {
                     try
                     {
-                        status = TryCopyToTail(in srcLogRecord, sessionFunctions, ref operationState, ref stackCtx);
+                        if (conditionalCopyLosesOnceForTest)
+                            (conditionalCopyLosesOnceForTest, status) = (false, OperationStatus.RETRY_NOW);
+                        else
+                            status = TryCopyToTail(in srcLogRecord, sessionFunctions, ref operationState, ref stackCtx);
                     }
                     finally
                     {
@@ -92,8 +107,20 @@ namespace Tsavorite.core
                 var minAddress = stackCtx.recSrc.LatestLogicalAddress + 1;
                 OperationStackContext<TStoreFunctions, TAllocator> stackCtx2 = new(stackCtx.hei.hash);
                 bool needIO;
+                conditionalCopyRetryForTest?.Invoke();
                 do
                 {
+                    // An in-memory source (ReadFromImmutable) is valid only while its page is above HeadAddress; the retry above may have
+                    // refreshed the epoch and let it close, so it is dropped here, before the search reads its key (best effort copy).
+                    if (!wantIO && stackCtx.recSrc.LogicalAddress < hlogBase.HeadAddress)
+                    {
+                        if (!conditionalCopyEvictedCheckOffForTest)
+                        {
+                            _ = Interlocked.Increment(ref copiesFromEvictedSourcesDropped);
+                            return OperationStatus.SUCCESS;
+                        }
+                        conditionalCopySearchedEvictedForTest++;
+                    }
                     if (TryFindRecordInMainLogForConditionalOperation<TSourceLogRecord, TInput, TOutput, TContext, TSessionFunctionsWrapper>(
                             sessionFunctions, srcLogRecord, ref stackCtx2, stackCtx.recSrc.LogicalAddress, minAddress, maxAddress, out status, out needIO))
                         return OperationStatus.SUCCESS;
