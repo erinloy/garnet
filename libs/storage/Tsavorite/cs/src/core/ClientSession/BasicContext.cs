@@ -559,6 +559,24 @@ namespace Tsavorite.core
         public bool ConditionalInsertReadCacheTombstone(TKey key, long sinceAddress)
             => ConditionalInsertReadCacheBytes(key, default, tombstone: true, sinceAddress);
 
+        /// <summary>Ziltch ADR-0147 s.3.4: drop the key's read-cache copy (another node changed it); true when one was there. Unlike an insert it
+        /// is not best effort, so a caller holding this store's epoch (the Resume would nest) is refused by exception, never skipped.</summary>
+        public bool InvalidateReadCache(TKey key)
+        {
+            if (store.epoch.ThisInstanceProtected())
+                throw new InvalidOperationException("InvalidateReadCache was called under this store's epoch; a notice must not be dropped, so it is refused loudly");
+            UnsafeResumeThread();
+            try
+            {
+                return store.InvalidateReadCacheBytes<TKey, TInput, TOutput, TContext, SessionFunctionsWrapper<TKey, TInput, TOutput, TContext, TFunctions,
+                        BasicSessionLocker<TStoreFunctions, TAllocator>, TStoreFunctions, TAllocator>>(sessionFunctions, key);
+            }
+            finally
+            {
+                UnsafeSuspendThread();
+            }
+        }
+
         private bool ConditionalInsertReadCacheBytes(TKey key, ReadOnlySpan<byte> value, bool tombstone, long sinceAddress)
         {
             // LightEpoch is not re-entrant: a Resume on a thread that already holds this store's epoch claims a second table slot, the
