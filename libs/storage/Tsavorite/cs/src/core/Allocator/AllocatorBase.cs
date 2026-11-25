@@ -1736,6 +1736,20 @@ namespace Tsavorite.core
         /// <summary>Pages returned because their slot held no page of the resident window when a size tracker counted the log.</summary>
         internal long pagesReturnedOutsideResident;
 
+        /// <summary>Lowers or raises <see cref="MaxAllocatedPageCount"/> within <see cref="BufferSize"/>: a lower count evicts down to it at once
+        /// (a closed page is freed), a higher one is taken page by page as the tail turns. Eviction stays the page turn's.</summary>
+        internal void SetMaxAllocatedPageCount(int pages, bool wait)
+        {
+            pages = Math.Clamp(pages, LogSettings.kMinPageCount, BufferSize);
+            var shrink = pages < MaxAllocatedPageCount;
+            MaxAllocatedPageCount = pages;
+            if (!shrink)
+                return;
+            var newHead = GetLogicalAddressOfStartOfPage(Math.Max(0, GetPage(GetTailAddress()) - pages + 1));
+            if (newHead > HeadAddress)
+                ShiftAddressesWithWait(newHead, newHead, wait);
+        }
+
         /// <summary>
         /// Returns every allocated page whose slot holds no page from ClosedUntilAddress's page to the page past the tail. A store that recovers
         /// keeps every page it read to replay the index, those below its head too, and a size tracker counts them against its budget for the

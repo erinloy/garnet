@@ -186,6 +186,10 @@ namespace Tsavorite.core
         public void ShiftAddresses(long newReadOnlyAddress, long newHeadAddress, bool waitForEviction)
             => allocatorBase.ShiftAddressesWithWait(newReadOnlyAddress, newHeadAddress, waitForEviction);
 
+        /// <summary>The pages the log may hold in memory, within the buffer it opened with: a lower count evicts down to it at once and frees
+        /// the pages, a higher one is taken as the tail turns. Eviction stays the page turn's (a read cache keeps its second chance).</summary>
+        public void SetMaxAllocatedPageCount(int pages, bool wait = true) => allocatorBase.SetMaxAllocatedPageCount(pages, wait);
+
         /// <summary>
         /// Subscribe to records (in batches) as they become read-only in the log
         /// Currently, we support only one subscriber to the log (easy to extend)
