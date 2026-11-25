@@ -464,7 +464,7 @@ namespace Tsavorite.core
             {
                 Debug.Assert(!allocOptions.elideSourceRecord, "Elidable records going down the deletion via RMW path from NCU should have already been handled." +
                     "This block only handles NCU requested deletion for unelidable src records.");
-                sizeInfo = hlog.GetDeleteRecordSize(key);
+                sizeInfo = DeleteRecordSize(key);
             }
 
             if (!TryAllocateRecord(sessionFunctions, ref operationState, ref stackCtx, ref sizeInfo, allocOptions, out var newLogicalAddress, out var newPhysicalAddress, out var status))

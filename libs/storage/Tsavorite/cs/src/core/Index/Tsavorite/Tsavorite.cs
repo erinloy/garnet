@@ -35,6 +35,8 @@ namespace Tsavorite.core
         internal readonly int InitialIORecordSize;
         /// <summary>From <see cref="KVSettings.KeepDeleteTombstones"/>: a delete never elides its record.</summary>
         internal readonly bool KeepDeleteTombstones;
+        /// <summary>From <see cref="KVSettings.TombstonesCarryETag"/>: a new tombstone is sized with an ETag.</summary>
+        internal readonly bool TombstonesCarryETag;
         /// <summary>From <see cref="KVSettings.ElideDeletedRecords"/>.</summary>
         internal readonly bool ElideDeletedRecords;
         /// <summary>From <see cref="KVSettings.ReportReadOnlyUpsertSource"/>.</summary>
@@ -257,6 +259,7 @@ namespace Tsavorite.core
                 sectorSize = (int)logSettings.LogDevice.SectorSize;
                 InitialIORecordSize = kvSettings.InitialIORecordSize;
                 KeepDeleteTombstones = kvSettings.KeepDeleteTombstones;
+                TombstonesCarryETag = kvSettings.TombstonesCarryETag;
                 ElideDeletedRecords = kvSettings.ElideDeletedRecords;
                 ReportReadOnlyUpsertSource = kvSettings.ReportReadOnlyUpsertSource;
                 Initialize(kvSettings.GetIndexSizeCacheLines(), sectorSize);

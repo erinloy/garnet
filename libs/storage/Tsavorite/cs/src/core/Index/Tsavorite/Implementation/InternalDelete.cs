@@ -196,6 +196,20 @@ namespace Tsavorite.core
             return CheckCPRConsistencyUpsert(phase, ref stackCtx, ref status);
         }
 
+        /// <summary>A new tombstone's size: with an ETag when <see cref="TombstonesCarryETag"/>, so InitialDeleter can stamp it.</summary>
+        internal RecordSizeInfo DeleteRecordSize<TKey>(TKey key)
+            where TKey : IKey
+#if NET9_0_OR_GREATER
+                , allows ref struct
+#endif
+        {
+            var sizeInfo = hlog.GetDeleteRecordSize(key);
+            if (!TombstonesCarryETag) return sizeInfo;
+            sizeInfo.FieldInfo.HasETag = true;
+            hlog.PopulateRecordSizeInfo(ref sizeInfo);
+            return sizeInfo;
+        }
+
         /// <summary>
         /// Create a new tombstoned record for Delete
         /// </summary>
@@ -215,8 +229,8 @@ namespace Tsavorite.core
 #endif
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
         {
-            var sizeInfo = hlog.GetDeleteRecordSize(key);
-            Debug.Assert(!sizeInfo.FieldInfo.HasETag && !sizeInfo.FieldInfo.HasExpiration, $"Delete new-record sizeInfo should not have HasETag {sizeInfo.FieldInfo.HasETag} or HasExpiration {sizeInfo.FieldInfo.HasExpiration}");
+            var sizeInfo = DeleteRecordSize(key);
+            Debug.Assert(sizeInfo.FieldInfo.HasETag == TombstonesCarryETag && !sizeInfo.FieldInfo.HasExpiration, $"Delete new-record sizeInfo should have HasETag {TombstonesCarryETag}, not {sizeInfo.FieldInfo.HasETag}, and no HasExpiration {sizeInfo.FieldInfo.HasExpiration}");
 
             AllocateOptions allocOptions = new()
             {

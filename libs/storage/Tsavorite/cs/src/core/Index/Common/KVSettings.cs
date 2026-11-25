@@ -148,6 +148,12 @@ namespace Tsavorite.core
         public bool KeepDeleteTombstones = false;
 
         /// <summary>
+        /// A new tombstone record is sized with an ETag, so a delete can carry the same write stamp an upsert does (a farm orders one key's
+        /// writes across nodes by it). Off, a tombstone has no optionals.
+        /// </summary>
+        public bool TombstonesCarryETag = false;
+
+        /// <summary>
         /// Whether a delete of a key's only record may elide it: clear its hash entry and invalidate the record. A store recovered from
         /// a fuzzy index checkpoint sets this false: the elided record is Invalid, so replay skips it, and the checkpoint's entry for the
         /// key reads back an older copy of it. A delete then leaves its tombstone, and compaction drops it as usual.
