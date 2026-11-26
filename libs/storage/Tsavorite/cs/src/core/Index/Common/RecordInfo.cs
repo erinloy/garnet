@@ -105,7 +105,9 @@ namespace Tsavorite.core
         public void ClearBitsForDiskImages()
         {
             // A Sealed record may become current again during recovery if the RCU-inserted record was not written to disk during a crash. So clear that bit here.
-            word &= ~kSealedBitMask;
+            // Only a Valid one: an elided first version (SealAndInvalidate, prev 0) is Sealed alone, and clearing it reads as IsNull padding.
+            if ((word & kValidBitMask) != 0)
+                word &= ~kSealedBitMask;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
