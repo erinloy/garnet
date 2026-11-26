@@ -775,6 +775,13 @@ namespace Tsavorite.core
         }
         internal bool IsAllocated(int pageIndex) => pagePointers[pageIndex] != 0;
 
+        /// <summary>A freed page leaves its slot when something bounds the log below its ring: a size tracker, or a page count under
+        /// <see cref="BufferSize"/>. Kept, every slot the tail turns through would hold a page, and the ring's whole size stays resident.</summary>
+        internal bool ReturnsFreedPages => logSizeTracker is not null || (MaxAllocatedPageCount < BufferSize && !keepsFreedPagesForTest);
+
+        /// <summary>Test seam, the band gate's mutant: a freed page stays in its slot whatever bounds the ring.</summary>
+        internal bool keepsFreedPagesForTest;
+
         internal virtual void ClearPage(long page, int offset = 0)
         {
             var idx = page % BufferSize;
