@@ -55,6 +55,11 @@ namespace Tsavorite.core
         {
             var adjustedSize = pageSize + 2 * sectorSize;
 
+            if (pool is not null && !holds)
+            {
+                pool.ReserveExactly(frameSize);
+                holds = true;
+            }
             if (blocks is not null)
             {
                 // Direct-VM (mmap/VirtualAlloc): demand-zero, first-touch-placed, matching GC.AllocateArray.
@@ -65,11 +70,6 @@ namespace Tsavorite.core
                 return;
             }
 
-            if (pool is not null && !holds)
-            {
-                pool.ReserveExactly(frameSize);
-                holds = true;
-            }
             var tmp = pool?.Rent() ?? GC.AllocateArray<byte>(adjustedSize, pinned: true);
             var p = (long)Unsafe.AsPointer(ref tmp[0]);
             pointers[index] = RoundUp(p, sectorSize);
@@ -127,6 +127,10 @@ namespace Tsavorite.core
                 blocks[i] = default;
                 pointers[i] = 0;
             }
+            // the reservation the scan took is the pool's budget whatever backs the slots: kept, every later scan waits BudgetWait (sparky 11-26)
+            if (holds)
+                pool.Release(frameSize);
+            holds = false;
         }
     }
 
