@@ -63,17 +63,17 @@ namespace Tsavorite.devices
 
         private static (BlobClientOptions AggressiveOptions, BlobClientOptions DefaultOptions, BlobClientOptions WithRetriesOptions) GetBlobClientOptions()
         {
-            var AggressiveOptions = new BlobClientOptions();
+            var AggressiveOptions = new BlobClientOptions { Transport = BlobTransport.Shared };
             AggressiveOptions.Retry.MaxRetries = 0;
             AggressiveOptions.Retry.NetworkTimeout = TimeSpan.FromSeconds(3);
             AggressiveOptions.AddPolicy(new ServerTimeoutPolicy(2), HttpPipelinePosition.PerCall);
 
-            var DefaultOptions = new BlobClientOptions();
+            var DefaultOptions = new BlobClientOptions { Transport = BlobTransport.Shared };
             DefaultOptions.Retry.MaxRetries = 0;
             DefaultOptions.Retry.NetworkTimeout = TimeSpan.FromSeconds(16);
             DefaultOptions.AddPolicy(new ServerTimeoutPolicy(15), HttpPipelinePosition.PerCall);
 
-            var WithRetriesOptions = new BlobClientOptions();
+            var WithRetriesOptions = new BlobClientOptions { Transport = BlobTransport.Shared };
             WithRetriesOptions.Retry.MaxRetries = 10;
             WithRetriesOptions.Retry.Mode = RetryMode.Exponential;
             WithRetriesOptions.Retry.Delay = TimeSpan.FromSeconds(1);
