@@ -180,8 +180,12 @@ namespace Tsavorite.test.Objects
             // For each new page index, throw OOM the first 'failuresPerPage' times we are asked to allocate it; thereafter succeed.
             // Bounded so the test deterministically terminates: under contention multiple threads may race for the natural-owner role on
             // any given page, and each loss is one of the bounded failures. The remainingFailures map below is keyed by page index.
+            // The hook exists only where Tsavorite.core kept DEBUG; this repo's Directory.Build.targets strips it, so ask the core, not this test's symbols.
+            var hook = map.objectArray.GetType().GetField("testInjectAddPageFailure", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (hook is null)
+                Assert.Ignore("Tsavorite.core was compiled without DEBUG, so MultiLevelPageArray has no testInjectAddPageFailure hook");
             var remainingFailures = new ConcurrentDictionary<int, int>();
-            map.objectArray.testInjectAddPageFailure = pageIdx =>
+            hook.SetValue(map.objectArray, (Func<int, bool>)(pageIdx =>
             {
                 while (true)
                 {
@@ -191,7 +195,7 @@ namespace Tsavorite.test.Objects
                     if (remainingFailures.TryUpdate(pageIdx, current - 1, current))
                         return true;
                 }
-            };
+            }));
 
             // We want to cross several page boundaries so the OOM path is exercised for multiple pages. Choose enough total allocations
             // to fill past the initial book size; the exact count is not load-bearing, only that it crosses multiple page boundaries.
