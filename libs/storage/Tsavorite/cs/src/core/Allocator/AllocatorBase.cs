@@ -292,6 +292,34 @@ namespace Tsavorite.core
         /// <summary>The "event" to be waited on for flush completion by the initiator of an operation</summary>
         internal CompletionEvent flushEvent;
 
+        /// <summary>Why the flush waits are given up, once a stop asks it (ziltch router 10-21: 12 writers waited on <see cref="flushEvent"/> for 61 min
+        /// behind a device that held its writes, and the stop waited for them); null while a write waits for its flush as it always did.</summary>
+        private volatile string flushWaitsAbandonedBecause;
+
+        /// <summary>Releases every thread waiting for a flush and refuses each wait after, by <paramref name="why"/>: a held device's page never
+        /// flushing no longer holds a writer, an allocation or a begin shift forever. The flag is written before the event is set, so a waiter
+        /// that took the new event after the set sees it before it waits.</summary>
+        public void AbandonFlushWaits(string why)
+        {
+            flushWaitsAbandonedBecause = why ?? "the flush waits were given up";
+            flushEvent.Set();
+            _ = notifyFlushedUntilAddressTcs?.TrySetException(StandingFlushRefusal);   // a checkpoint's WAIT_FLUSH fails by name, not forever
+        }
+
+        /// <summary>What a flush waiter is failed with at once: a standing flush fault, else the given-up flush waits; null when neither stands.</summary>
+        private Exception StandingFlushRefusal => (Exception)flushFault
+            ?? (flushWaitsAbandonedBecause is { } why ? new TsavoriteException($"refused: this checkpoint waited for a page flush that will not come ({why})") : null);
+
+        /// <summary>Why the flush waits are given up, or null.</summary>
+        public string FlushWaitsAbandonedBecause => flushWaitsAbandonedBecause;
+
+        /// <summary>Throws when the flush waits are given up: called before and after each wait for a flush.</summary>
+        internal void ThrowIfFlushWaitsAbandoned()
+        {
+            if (flushWaitsAbandonedBecause is { } why)
+                throw new TsavoriteException($"refused: this write waited for a page flush that will not come ({why})");
+        }
+
         /// <summary>If set, this is a function to call to determine whether the object size tracker reports maximum memory size has been exceeded.</summary>
         public Func<bool> IsSizeBeyondLimit;
         #endregion
@@ -1555,6 +1583,7 @@ namespace Tsavorite.core
                     try
                     {
                         epoch.Suspend();
+                        ThrowIfFlushWaitsAbandoned();
                         _ = localFlushEvent.Wait(TimeSpan.FromMilliseconds(1));
                     }
                     finally
@@ -1639,7 +1668,7 @@ namespace Tsavorite.core
                 notifyFlushedUntilAddress = localTailAddress;
                 // A standing flush fault means FlushedUntilAddress cannot reach this tail: the waiter fails now, with the range
                 // and the code, rather than waiting for a flush the device is refusing.
-                if (flushFault is { } fault)
+                if (StandingFlushRefusal is { } fault)
                     _ = notifyFlushedUntilAddressTcs.TrySetException(fault);
                 epoch.BumpCurrentEpoch(() => OnPagesMarkedReadOnly(localTailAddress));
                 return true;
@@ -1659,7 +1688,7 @@ namespace Tsavorite.core
                 notifyFlushedUntilAddressTcs = tcs;
                 notifyFlushedUntilAddress = localTailAddress;
                 notifyDone = tcs.Task;
-                if (flushFault is { } standing)
+                if (StandingFlushRefusal is { } standing)
                     _ = tcs.TrySetException(standing);
                 else if (FlushedUntilAddress >= localTailAddress)
                     _ = tcs.TrySetResult(true);   // landed between the check and the publish, so the flush path did not see this waiter
@@ -1709,7 +1738,9 @@ namespace Tsavorite.core
                     try
                     {
                         epoch.Suspend();
+                        ThrowIfFlushWaitsAbandoned();
                         localFlushEvent.Wait();
+                        ThrowIfFlushWaitsAbandoned();
                     }
                     finally
                     {

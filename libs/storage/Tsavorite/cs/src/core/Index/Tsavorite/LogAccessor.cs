@@ -67,6 +67,12 @@ namespace Tsavorite.core
         /// <summary>Threads waiting now for a page to turn.</summary>
         public long AllocateWaiting => Interlocked.Read(ref allocatorBase.AllocateWaiting);
 
+        /// <summary>Releases every thread waiting for a page flush and refuses each such wait after, by <paramref name="why"/> (a stop whose device holds its flushes).</summary>
+        public void AbandonFlushWaits(string why) => allocatorBase.AbandonFlushWaits(why);
+
+        /// <summary>Why the flush waits were given up, or null.</summary>
+        public string FlushWaitsAbandonedBecause => allocatorBase.FlushWaitsAbandonedBecause;
+
         /// <summary>
         /// Beginning address of log
         /// </summary>

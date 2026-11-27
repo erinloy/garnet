@@ -80,7 +80,9 @@ namespace Tsavorite.core
                     try
                     {
                         epoch.Suspend();
+                        hlogBase.ThrowIfFlushWaitsAbandoned();
                         operationState.flushEvent.Wait();
+                        hlogBase.ThrowIfFlushWaitsAbandoned();
                     }
                     finally
                     {
