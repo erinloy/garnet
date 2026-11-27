@@ -85,7 +85,10 @@ namespace Tsavorite.core
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
         {
             Debug.Assert(!stackCtx.recSrc.HasReadCacheSrc, "Should not call CanElide() for readcache records");
+            // A read-only source may already be a checkpoint's bytes: invalidating it in memory reaches the device when its page is
+            // re-flushed, and a recovery to that checkpoint loses the key (kill sweep 11-27, chunk CD). Only a mutable source elides.
             return stackCtx.hei.Address == stackCtx.recSrc.LogicalAddress && srcRecordInfo.PreviousAddress < hlogBase.BeginAddress
+                        && stackCtx.recSrc.LogicalAddress >= hlogBase.ReadOnlyAddress
                         && !IsFrozen<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcRecordInfo);
         }
 
